@@ -1,6 +1,7 @@
 import requests
 from bs4 import BeautifulSoup
 from pymongo import MongoClient
+import concurrent.futures  # For parallel requests
 import time
 
 # MongoDB Connection
@@ -9,75 +10,86 @@ client = MongoClient(MONGO_URI)
 db = client["news_db"]
 collection = db["articles"]
 
-# BBC News URL
-URL = "https://www.bbc.com/news"
+# BBC News URLs
+URLS = [
+    "https://www.bbc.com/news",
+    "https://www.bbc.com/business",
+    "https://www.bbc.com/innovation",
+    "https://www.bbc.com/culture",
+    "https://www.bbc.com/arts",
+    "https://www.bbc.com/travel",
+    "https://www.bbc.com/future-planet"
+]
+
 headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
 }
 
 # Function to extract full article text
 def get_full_article(article_url):
-    """Scrapes the full text of an article from its URL."""
     try:
-        response = requests.get(article_url, headers=headers)
+        response = requests.get(article_url, headers=headers, timeout=10)
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, "html.parser")
+            article_tag = soup.find("article")
 
-            # Find all paragraphs in the article content section
-            paragraphs = soup.find_all("p")
+            if not article_tag:
+                return None
 
-            # Combine paragraphs into full text
+            paragraphs = article_tag.find_all("p")
             full_text = "\n".join([p.text.strip() for p in paragraphs if p.text.strip()])
-            return full_text
-        else:
-            print(f"⚠️ Skipping {article_url}, status code: {response.status_code}")
-            return None
+            return full_text if full_text else None
+        return None
     except Exception as e:
         print(f"❌ Error fetching article {article_url}: {e}")
         return None
 
-# Send GET request to main news page
-response = requests.get(URL, headers=headers)
+# Function to scrape a single section
+def scrape_section(url):
+    try:
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code != 200:
+            print(f"⚠️ Skipping {url}, status code: {response.status_code}")
+            return []
 
-if response.status_code == 200:
-    soup = BeautifulSoup(response.text, "html.parser")
-
-    sections = soup.find_all("section")
-    print(f"🔎 Found {len(sections)} sections")
-
-    total_articles = 0  # Counter for saved articles
-
-    for section in sections:
-        articles = section.find_all("a", href=True)
+        soup = BeautifulSoup(response.text, "html.parser")
+        articles = soup.find_all("a", href=True)
+        article_list = []
 
         for article in articles:
             title_tag = article.find("h3") or article.find("h2")
-            
             if title_tag:
                 title = title_tag.text.strip()
                 link = f"https://www.bbc.com{article['href']}" if article['href'].startswith("/") else article['href']
 
-                # Check if the article already exists in MongoDB
+                # Skip if the article already exists in MongoDB
                 if collection.count_documents({"url": link}) == 0:
-                    print(f"🌐 Scraping full article: {title}")
+                    article_list.append({"title": title, "url": link})
+        return article_list
+    except Exception as e:
+        print(f"❌ Error scraping {url}: {e}")
+        return []
 
-                    full_text = get_full_article(link)
+# Function to scrape all sections in parallel
+def scrape_all_sections():
+    total_articles_saved = 0
+    all_articles = []
 
-                    if full_text:
-                        news_item = {
-                            "title": title,
-                            "url": link,
-                            "content": full_text
-                        }
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        results = executor.map(scrape_section, URLS)
+        for section_articles in results:
+            all_articles.extend(section_articles)
 
-                        collection.insert_one(news_item)
-                        total_articles += 1
-                        print(f"✅ Article saved: {title}")
+    # Fetch full article text in parallel
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        for article, full_text in zip(all_articles, executor.map(get_full_article, [a["url"] for a in all_articles])):
+            if full_text:
+                article["content"] = full_text
+                collection.insert_one(article)  # Insert into MongoDB
+                total_articles_saved += 1
+                print(f"✅ Saved: {article['title']}")
 
-                    # Sleep to avoid getting blocked
-                    time.sleep(2)
+    print(f"🎉 Total new articles saved: {total_articles_saved}")
 
-    print(f"🎉 Total new articles saved: {total_articles}")
-
-else:
-    print(f"❌ Failed to retrieve data: {response.status_code}")
+# Run the scraper
+scrape_all_sections()
