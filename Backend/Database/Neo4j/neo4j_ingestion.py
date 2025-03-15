@@ -8,11 +8,10 @@ client = MongoClient(MONGO_URI)
 db = client["news_db"]
 collection = db["articles"]
 
-# Neo4j Connection (Update with your credentials)
+# Neo4j Connection 
 NEO4J_URI = "neo4j+s://a2db5be7.databases.neo4j.io"
 NEO4J_USER = "neo4j"
 NEO4J_PASSWORD = "d58VQZXosR0wt5AktACNvRlWFHfVjPVskcSqkyUgN78"
-
 driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
 
 def batch_create_entities(tx, entities_batch):
