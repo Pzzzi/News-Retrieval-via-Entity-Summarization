@@ -1,92 +1,108 @@
 from pymongo import MongoClient
 from neo4j import GraphDatabase
-from collections import defaultdict
+import spacy
 
+# ====== Database Connections ======
 # MongoDB Connection
 MONGO_URI = "mongodb+srv://Jason:jason1234@cluster0.e3lxn.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
 client = MongoClient(MONGO_URI)
 db = client["news_db"]
 collection = db["articles"]
 
-# Neo4j Connection 
+# Neo4j Connection
 NEO4J_URI = "neo4j+s://a2db5be7.databases.neo4j.io"
 NEO4J_USER = "neo4j"
 NEO4J_PASSWORD = "d58VQZXosR0wt5AktACNvRlWFHfVjPVskcSqkyUgN78"
 driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
 
-def batch_create_entities(tx, entities_batch):
-    """Creates entity nodes in Neo4j with their correct labels."""
+# Load spaCy model
+nlp = spacy.load("en_core_web_sm")
+
+# === Relationship Filtering Rules ===
+INVALID_VERBS = {"come", "have", "make", "step", "smile", "say", "told", "report", "describe"}
+VALID_ENTITY_PAIRS = {
+    ("PERSON", "ORG"), ("ORG", "ORG"), ("ORG", "GPE"), ("GPE", "ORG"), ("PERSON", "GPE"),
+    ("EVENT", "DATE"), ("PRODUCT", "ORG")
+}
+
+# ====== Create Entities in Neo4j ======
+def create_entity(tx, name, label):
     query = """
-    UNWIND $entities AS entity
-    CALL apoc.create.node([entity.label], {name: entity.name}) YIELD node
-    RETURN node
+    MERGE (e:Entity {name: $name})
+    ON CREATE SET e.type = $label
     """
-    tx.run(query, entities=entities_batch)
+    tx.run(query, name=name, label=label)
 
-def batch_create_relationships(tx, relationships_batch):
-    """Creates relationships between entities in bulk."""
+# ====== Create Relationships in Neo4j ======
+def create_relationship(tx, entity1, entity2, rel_type):
     query = """
-    UNWIND $relationships AS rel
-    MATCH (e1 {name: rel.entity1})
-    MATCH (e2 {name: rel.entity2})
-    MERGE (e1)-[r:MENTIONED_WITH]->(e2)
-    ON CREATE SET r.count = rel.count
-    ON MATCH SET r.count = r.count + rel.count
+    MATCH (e1:Entity {name: $entity1})
+    MATCH (e2:Entity {name: $entity2})
+    MERGE (e1)-[r:RELATIONSHIP {type: $rel_type}]->(e2)
+    ON CREATE SET r.weight = 1
+    ON MATCH SET r.weight = r.weight + 1
     """
-    tx.run(query, relationships=relationships_batch)
+    tx.run(query, entity1=entity1, entity2=entity2, rel_type=rel_type)
 
-def import_entities_to_neo4j(batch_size=500):
-    """Extracts entities from MongoDB & inserts them into Neo4j in batches."""
-    entities_set = set()  # Track unique entities
-    relationships_dict = defaultdict(int)  # Track entity co-occurrences
+# ====== Relationship Extraction with Context ======
+def extract_relationships(doc, entities):
+    """Automatically detect relationships using dependency parsing and context filtering."""
+    relationships = []
+    entity_map = {ent["text"]: ent["label"] for ent in entities}
+    sentences = list(doc.sents)
 
-    # Process each article in batches
-    entity_batch = []
-    for article in collection.find():
-        entities = article.get("entities", [])
-        unique_entities = {(ent["text"], ent["label"]) for ent in entities}  # Remove duplicates per article
-        
-        # Add entities to batch
-        for name, label in unique_entities:
-            if name not in entities_set:
-                entity_batch.append({"name": name, "label": label})
-                entities_set.add(name)
-        
-        # Track relationships
-        for i in range(len(entities)):
-            for j in range(i + 1, len(entities)):  # Avoid self-loops
-                entity1, entity2 = entities[i]["text"], entities[j]["text"]
-                relationships_dict[(entity1, entity2)] += 1
-        
-        # Insert entities in batches
-        if len(entity_batch) >= batch_size:
-            with driver.session() as session:
-                session.execute_write(batch_create_entities, entity_batch)
-            entity_batch = []  # Reset batch
+    for sent in sentences:
+        sent_text = sent.text
+        sent_doc = nlp(sent_text)
 
-    # Insert remaining entities
-    if entity_batch:
-        with driver.session() as session:
-            session.execute_write(batch_create_entities, entity_batch)
+        entity_pairs = [(e1, e2) for e1 in entity_map for e2 in entity_map if e1 != e2 and e1 in sent_text and e2 in sent_text]
 
-    # Convert relationships dictionary to list format for bulk insert
-    relationships_batch = [
-        {"entity1": e1, "entity2": e2, "count": count}
-        for (e1, e2), count in relationships_dict.items()
-    ]
+        for e1, e2 in entity_pairs:
+            label1, label2 = entity_map[e1], entity_map[e2]
 
-    # Insert relationships in batches
-    batch_size = 500
-    for i in range(0, len(relationships_batch), batch_size):
-        batch = relationships_batch[i:i+batch_size]
-        with driver.session() as session:
-            session.execute_write(batch_create_relationships, batch)
+            # Filter out invalid entity pairs
+            if (label1, label2) not in VALID_ENTITY_PAIRS and (label2, label1) not in VALID_ENTITY_PAIRS:
+                continue  
 
-import_entities_to_neo4j()
-print("🎉 Bulk Entity Ingestion Complete with Correct Labels!")
+            # Identify valid verbs between entities
+            rel_type = None
+            for token in sent_doc:
+                if token.head.text in {e1, e2} and token.pos_ == "VERB":
+                    verb = token.lemma_.upper()
+                    
+                    if verb not in INVALID_VERBS:
+                        rel_type = verb
+                        break  # Stop at the first valid relationship
 
-# Close Neo4j connection
+            # Only create a relationship if a valid verb is found
+            if rel_type:
+                relationships.append((e1, e2, rel_type))
+
+    return relationships
+
+# ====== Main Ingestion Function ======
+def import_entities_and_relationships():
+    """Ingest entities and auto-detected relationships into Neo4j."""
+    with driver.session() as session:
+        for article in collection.find():
+            content = article.get("content", "")
+            entities = article.get("entities", [])
+
+            # Step 1: Create Entity Nodes
+            for entity in entities:
+                session.write_transaction(create_entity, entity["text"], entity["label"])
+
+            # Step 2: Extract Relationships with Context Awareness
+            doc = nlp(content)
+            relationships = extract_relationships(doc, entities)
+
+            # Step 3: Create Relationships in Neo4j
+            for e1, e2, rel_type in relationships:
+                session.write_transaction(create_relationship, e1, e2, rel_type)
+
+    print("✅ Refined Relationship Extraction Complete!")
+
+# ====== Run the Ingestion ======
+import_entities_and_relationships()
 driver.close()
-
-
-
+print("🎉 Neo4j connection closed.")

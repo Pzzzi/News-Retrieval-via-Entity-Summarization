@@ -19,7 +19,7 @@ function App() {
 
   return (
     <div style={{ padding: "20px", fontFamily: "Arial" }}>
-      <h2>🔎 Entity-Based News Search</h2>
+      <h2>🔍 Entity-Based News Search</h2>
       <input
         type="text"
         placeholder="Search for an entity (e.g., Tesla)"
@@ -55,4 +55,5 @@ function App() {
 }
 
 export default App;
+
 
