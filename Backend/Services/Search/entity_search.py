@@ -31,8 +31,10 @@ def get_related_entities(entity_name):
 def search_articles_by_entity(entity_name, related_entities):
     search_terms = [entity_name] + [e["id"] for e in related_entities]
     query = {"entities.text": {"$in": search_terms}}
-    articles = collection.find(query, {"title": 1, "url": 1, "_id": 0}).limit(10)
-    return list(articles)
+    articles = collection.find(query, {"title": 1, "url": 1, "_id": 1}).limit(10)
+
+    # Convert ObjectId to string
+    return [{"_id": str(article["_id"]), "title": article["title"], "url": article["url"]} for article in articles]
 
 
 # === Unified Search Function ===

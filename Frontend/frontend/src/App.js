@@ -6,15 +6,29 @@ function App() {
   const [query, setQuery] = useState("");
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [selectedSummary, setSelectedSummary] = useState(null);
 
   const searchEntity = async (entity = query) => {
     setLoading(true);
     try {
       const response = await axios.get(`http://127.0.0.1:5000/search?entity=${entity}`);
       setData(response.data);
-      setQuery(entity);  // Update query with new entity
+      setQuery(entity);
+      setSelectedSummary(null);
     } catch (error) {
       console.error("Error fetching data:", error);
+    }
+    setLoading(false);
+  };
+
+  const fetchSummary = async (articleId) => {
+    setLoading(true);
+    try {
+      const response = await axios.get(`http://127.0.0.1:5000/article_summary/${articleId}`);
+      setSelectedSummary(response.data.summary);
+    } catch (error) {
+      console.error("Error fetching summary:", error);
+      setSelectedSummary("No summary available.");
     }
     setLoading(false);
   };
@@ -45,10 +59,22 @@ function App() {
           <ul>
             {data.articles.map((article, index) => (
               <li key={index}>
-                <a href={article.url} target="_blank" rel="noopener noreferrer">{article.title}</a>
+                <button 
+                  onClick={() => fetchSummary(article._id)} 
+                  style={{ background: "none", border: "none", color: "blue", cursor: "pointer", textDecoration: "underline", padding: 0 }}
+                >
+                  {article.title}
+                </button>
               </li>
             ))}
           </ul>
+
+          {selectedSummary && (
+            <div>
+              <h4>Summary:</h4>
+              <p>{selectedSummary}</p>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -56,4 +82,3 @@ function App() {
 }
 
 export default App;
-
