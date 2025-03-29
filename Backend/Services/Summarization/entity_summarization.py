@@ -1,9 +1,12 @@
+import os
 from transformers import pipeline
 from pymongo import MongoClient
 from bson import ObjectId
+from dotenv import load_dotenv
 
-# === MongoDB Connection ===
-MONGO_URI = "mongodb+srv://Jason:jason1234@cluster0.e3lxn.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
+load_dotenv()
+
+MONGO_URI = os.getenv("MONGO_URI")
 mongo_client = MongoClient(MONGO_URI)
 db = mongo_client["news_db"]
 collection = db["articles"]

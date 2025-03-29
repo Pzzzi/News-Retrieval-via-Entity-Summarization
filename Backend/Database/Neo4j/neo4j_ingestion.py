@@ -1,18 +1,22 @@
+import os
+import spacy
 from pymongo import MongoClient
 from neo4j import GraphDatabase
-import spacy
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # ====== Database Connections ======
 # MongoDB Connection
-MONGO_URI = "mongodb+srv://Jason:jason1234@cluster0.e3lxn.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
+MONGO_URI=os.getenv("MONGO_URI")
 client = MongoClient(MONGO_URI)
 db = client["news_db"]
 collection = db["articles"]
 
 # Neo4j Connection
-NEO4J_URI = "neo4j+s://a2db5be7.databases.neo4j.io"
-NEO4J_USER = "neo4j"
-NEO4J_PASSWORD = "d58VQZXosR0wt5AktACNvRlWFHfVjPVskcSqkyUgN78"
+NEO4J_URI=os.getenv("NEO4J_URI")
+NEO4J_USER=os.getenv("NEO4J_USER")
+NEO4J_PASSWORD=os.getenv("NEO4J_PASSWORD")
 driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
 
 # Load spaCy model

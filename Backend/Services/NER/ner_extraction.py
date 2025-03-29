@@ -1,8 +1,11 @@
 import spacy
+import os
 from pymongo import MongoClient
+from dotenv import load_dotenv
 
-# Connect to MongoDB
-MONGO_URI = "mongodb+srv://Jason:jason1234@cluster0.e3lxn.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
+load_dotenv()
+
+MONGO_URI = os.getenv("MONGO_URI")
 client = MongoClient(MONGO_URI)
 db = client["news_db"]
 collection = db["articles"]

@@ -1,11 +1,15 @@
 import requests
+import os 
 from bs4 import BeautifulSoup
 from pymongo import MongoClient
 import concurrent.futures  # For parallel requests
 import time
+from dotenv import load_dotenv
 
-# MongoDB Connection
-MONGO_URI = "mongodb+srv://Jason:jason1234@cluster0.e3lxn.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
+load_dotenv()
+
+# Connect to MongoDB
+MONGO_URI=os.getenv("MONGO_URI")
 client = MongoClient(MONGO_URI)
 db = client["news_db"]
 collection = db["articles"]
