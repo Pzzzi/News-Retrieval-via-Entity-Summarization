@@ -13,17 +13,14 @@ collection = db["articles"]
 # Load spaCy English NER model
 nlp = spacy.load("en_core_web_sm")
 
-# Process each article
-for article in collection.find():
+# Process only articles without entities
+for article in collection.find({"entities": {"$exists": False}}):  
     text = article.get("content", "")
 
-    if text:
+    if text.strip():
         doc = nlp(text)
-
-        # Extract entities
         entities = [{"text": ent.text, "label": ent.label_} for ent in doc.ents]
 
-        # Update MongoDB with extracted entities
         collection.update_one(
             {"_id": article["_id"]},
             {"$set": {"entities": entities}}
@@ -32,3 +29,4 @@ for article in collection.find():
         print(f"✅ Processed: {article['title']} - Found {len(entities)} entities")
 
 print("🎉 NER Extraction Complete!")
+

@@ -1,0 +1,20 @@
+/* styles/main.css */
+.app {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px;
+  }
+  
+  .results-container {
+    display: grid;
+    grid-template-columns: 1fr 2fr;
+    gap: 20px;
+  }
+  
+  .articles-section {
+    grid-column: span 2;
+  }
+  
+  .graph-section {
+    min-height: 300px;
+  }

@@ -11,7 +11,7 @@ db = client["news_db"]
 collection = db["articles"]
 
 # Field to remove
-field_to_remove = "summary"  # Change this to the field you want to delete
+field_to_remove = "images"  # Change this to the field you want to delete
 
 # Update all documents to remove the field
 result = collection.update_many({}, {"$unset": {field_to_remove: ""}})
