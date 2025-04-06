@@ -52,10 +52,8 @@ def get_related_entities(entity_name):
 # === MongoDB: Search Articles with Ranking ===
 def search_articles_by_entity(entity_name, related_entities):
     """Fetch articles mentioning the entity & related entities, ranked by relevance."""
-
     search_terms = [entity_name] + [e["id"] for e in related_entities]
     
-    # Use MongoDB aggregation for ranking
     pipeline = [
         {"$match": {"entities.text": {"$in": search_terms}}},
         {"$addFields": {
@@ -69,15 +67,40 @@ def search_articles_by_entity(entity_name, related_entities):
                 }
             }
         }},
-        {"$sort": {"entity_mention_count": -1, "date": -1}},  # Sort by mentions & recency
+        {"$sort": {"entity_mention_count": -1, "date": -1}},
         {"$limit": 10},
-        {"$project": {"title": 1, "url": 1, "date": 1, "_id": 1, "entity_mention_count": 1}}
+        {"$project": {
+            "title": 1,
+            "url": 1,
+            "date": 1,
+            "_id": 1,
+            "images": 1,
+            "entity_mention_count": 1
+        }}
     ]
     
     articles = list(collection.aggregate(pipeline))
 
-    # Convert ObjectId to string
-    return [{"_id": str(article["_id"]), "title": article["title"], "url": article["url"], "date": article.get("date")} for article in articles]
+    def get_best_image(images):
+        if not images:
+            return None
+            
+        # BBC-specific logic - look for highest resolution
+        resolution_order = ['1536', '1586', '1526', '1024', '840', '800', '640', '480', '320', '240']
+        
+        for res in resolution_order:
+            for img in images:
+                if f"/{res}/" in img:
+                    return img
+        return images[0]  # Fallback to first image if no resolution matches
+
+    return [{
+        "_id": str(article["_id"]),
+        "title": article["title"],
+        "url": article["url"],
+        "date": article.get("date"),
+        "image": get_best_image(article.get("images")) if article.get("images") else None
+    } for article in articles]
 
 # === Query Suggestion When No Results Are Found ===
 def suggest_alternative_entities(entity_name):
@@ -118,4 +141,6 @@ def entity_search(entity_name):
         "articles": articles,
         "links": links
     }
+
+
 

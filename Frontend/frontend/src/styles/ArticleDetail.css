@@ -1,0 +1,41 @@
+.summary-container {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 20px;
+    line-height: 1.6;
+  }
+  
+  .back-button {
+    background: none;
+    border: none;
+    color: #1a73e8;
+    cursor: pointer;
+    font-size: 1em;
+    margin-bottom: 20px;
+    padding: 5px 0;
+  }
+  
+  .summary-content {
+    background: #f8f9fa;
+    padding: 20px;
+    border-radius: 8px;
+    margin: 20px 0;
+    white-space: pre-wrap;
+  }
+  
+  .original-link {
+    display: inline-block;
+    margin-top: 15px;
+    color: #1a73e8;
+    text-decoration: none;
+  }
+  
+  .loading {
+    text-align: center;
+    padding: 40px;
+  }
+  
+  .error {
+    color: #d32f2f;
+    padding: 20px;
+  }

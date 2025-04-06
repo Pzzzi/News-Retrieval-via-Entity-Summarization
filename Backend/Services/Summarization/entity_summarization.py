@@ -11,11 +11,11 @@ mongo_client = MongoClient(MONGO_URI)
 db = mongo_client["news_db"]
 collection = db["articles"]
 
-# === Load Summarization Pipeline ===
+# Load summarization pipeline
 summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
 
-# === Fetch Article Summary ===
 def get_article_summary(article_id):
+    """Fetch and generate article summary only"""
     try:
         article = collection.find_one({"_id": ObjectId(article_id)})
         if not article:
@@ -30,7 +30,11 @@ def get_article_summary(article_id):
         content = content[:max_input]
         
         summary = summarizer(content, max_length=130, min_length=30, do_sample=False)[0]["summary_text"]
-        return {"summary": summary}
+        return {
+            "summary": summary,
+            "article_title": article["title"],  # Include title for context
+            "article_url": article["url"]       # Include URL for reference
+        }
     
     except Exception as e:
         print(f"Error fetching article summary: {e}")
