@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from "react";
 import * as d3 from "d3";
+import '../styles/EntityGraph.css';
 
 const EntityGraph = ({ entity, relatedEntities, links, onEntityClick }) => {
   const svgRef = useRef();

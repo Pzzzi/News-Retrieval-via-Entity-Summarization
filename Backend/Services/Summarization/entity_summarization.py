@@ -40,3 +40,38 @@ def get_article_summary(article_id):
         print(f"Error fetching article summary: {e}")
         return {"error": "Internal Server Error"}
 
+def get_entity_summary(entity_name):
+    """Generate a summary for an entity using article titles only."""
+    try:
+        articles = collection.find({
+            "entities.text": {
+                "$regex": f"^{entity_name}$",
+                "$options": "i"
+            }
+        })
+
+        titles = [article.get("title", "") for article in articles if article.get("title")]
+
+        if not titles:
+            return {"error": "No titles found for the given entity"}
+
+        combined_titles = " ".join(titles)
+
+        summary = summarizer(
+            combined_titles[:1024],
+            max_length=100,
+            min_length=30,
+            do_sample=False
+        )[0]["summary_text"]
+
+        return {
+            "summary": summary,
+            "entity_name": entity_name,
+            "source": "titles"
+        }
+
+    except Exception as e:
+        print(f"Error generating summary from titles: {e}")
+        return {"error": "Internal Server Error"}
+
+

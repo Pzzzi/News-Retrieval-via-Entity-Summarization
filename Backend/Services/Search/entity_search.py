@@ -30,7 +30,7 @@ def get_related_entities(entity_name):
     with driver.session() as session:
         result = session.run(query, entity=entity_name)
         
-        nodes = {entity_name: {"id": entity_name}}  # Start with main entity
+        nodes = {entity_name: {"id": entity_name}}  
         links = set()
 
         for record in result:

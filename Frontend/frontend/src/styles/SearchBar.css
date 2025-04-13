@@ -1,0 +1,45 @@
+.search-bar-container {
+    position: relative;
+    width: 100%;
+    max-width: 500px;
+    margin: 0 auto;
+  }
+  
+  .search-input {
+    width: 100%;
+    padding: 10px 12px;
+    font-size: 16px;
+    border-radius: 6px;
+    border: 1px solid #ccc;
+  }
+  
+  .suggestion-list {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    width: 100%;
+    border: 1px solid #ddd;
+    background: white;
+    border-radius: 0 0 6px 6px;
+    z-index: 10;
+    max-height: 200px;
+    overflow-y: auto;
+  }
+  
+  .suggestion-list li {
+    padding: 10px;
+    cursor: pointer;
+  }
+  
+  .suggestion-list li:hover {
+    background: #f0f0f0;
+  }
+  
+  .entity-type-tag {
+    background-color: #ddd;
+    border-radius: 4px;
+    font-size: 12px;
+    padding: 2px 6px;
+    margin-right: 8px;
+  }
+  

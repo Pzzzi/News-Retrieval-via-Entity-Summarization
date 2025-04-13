@@ -2,7 +2,9 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from Services.Search.entity_search import entity_search
 from Services.Summarization.entity_summarization import get_article_summary
+from Services.Summarization.entity_summarization import get_entity_summary
 from Services.Home.home_data import get_homepage_data
+from Services.Search.search_bar import suggest_entities
 
 app = Flask(__name__)
 CORS(app)
@@ -31,6 +33,21 @@ def home_data():
         return jsonify(data)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+# Search bar suggestion
+@app.route("/suggest", methods=["GET"])
+def get_suggestions():
+    query = request.args.get("q", "").strip()
+    suggestions = suggest_entities(query)
+    return jsonify({"results": suggestions})
+
+@app.route('/entity_summary_titles/<entity_name>', methods=['GET'])
+def fetch_entity_summary_titles(entity_name):
+    summary_data = get_entity_summary(entity_name)
+    if "error" in summary_data:
+        return jsonify(summary_data), 404
+    return jsonify(summary_data)
+
 
 if __name__ == "__main__":
     app.run(debug=True)

@@ -1,8 +1,8 @@
-.article-card {
+/* .article-card {
   background: white;
   border-radius: 8px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-  overflow: hidden; /* Ensures image corners are rounded */
+  overflow: hidden; 
   transition: transform 0.2s, box-shadow 0.2s;
   cursor: pointer;
   border: 1px solid #eaeaea;
@@ -43,7 +43,7 @@
   flex-grow: 1;
 }
 
-/* Rest of your existing styles... */
+
 .article-meta {
   display: flex;
   gap: 12px;
@@ -70,4 +70,4 @@
 
 .article-link:hover {
   text-decoration: underline;
-}
+} */
