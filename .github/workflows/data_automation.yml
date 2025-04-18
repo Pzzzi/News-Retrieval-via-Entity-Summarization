@@ -24,4 +24,5 @@ jobs:
     - name: Run Original Scraper
       env:
         MONGO_URI: ${{ secrets.MONGO_URI }}
-      run: python web_scraper.py
+      run: |
+        python Backend/Database/Mongo/web_scraper.py
