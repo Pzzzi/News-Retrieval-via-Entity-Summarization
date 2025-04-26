@@ -4,6 +4,7 @@ from bs4 import BeautifulSoup
 from pymongo import MongoClient
 import concurrent.futures  # For parallel requests
 import time
+import re
 from dotenv import load_dotenv
 from dateutil import parser  # To parse date strings into datetime objects
 
@@ -132,31 +133,73 @@ def scrape_section(url):
 
 # === Scrape All Sections in Parallel ===
 def scrape_all_sections():
-    """Scrapes BBC articles in parallel, including full content, date, and images."""
+    """Main scraping function with enhanced deduplication"""
     total_articles_saved = 0
-    all_articles = []
+    
+    # First pass: Collect all article links with URL cleaning
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+        future_to_url = {executor.submit(scrape_section, url): url for url in URLS}
+        unique_articles = {}
+        
+        for future in concurrent.futures.as_completed(future_to_url):
+            try:
+                section_articles = future.result()
+                for article in section_articles:
+                    # Clean URL by removing tracking parameters and fragments
+                    clean_url = article['url'].split('?')[0].split('#')[0]
+                    if clean_url not in unique_articles:
+                        unique_articles[clean_url] = article
+            except Exception as e:
+                print(f"❌ Section error: {e}")
 
-    # Scrape sections concurrently
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-        results = executor.map(scrape_section, URLS)
-        for section_articles in results:
-            all_articles.extend(section_articles)
+    # Second pass: Process and save articles with atomic checks
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+        future_to_url = {}
+        
+        for clean_url, article in unique_articles.items():
+            # Check MongoDB using URL prefix before processing
+            if not collection.find_one({"url": {"$regex": f"^{re.escape(clean_url)}"}}):
+                future = executor.submit(process_and_save_article, article)
+                future_to_url[future] = clean_url
 
-    # Fetch full text, date, and images in parallel
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-        for article, (full_text, pub_date, img_urls) in zip(all_articles, executor.map(get_full_article, [a["url"] for a in all_articles])):
-            if full_text:
-                article["content"] = full_text
-                article["date"] = pub_date  # Store date (as datetime object)
-                article["images"] = img_urls  # Store image URLs
-                
-                # Insert into MongoDB with consistent datetime format and images
-                collection.insert_one(article)  
-                total_articles_saved += 1
-                print(f"✅ Saved: {article['title']} (📅 {pub_date}, 🖼️ {len(img_urls)} images)")
+        for future in concurrent.futures.as_completed(future_to_url):
+            clean_url = future_to_url[future]
+            try:
+                if future.result():
+                    total_articles_saved += 1
+            except Exception as e:
+                print(f"❌ Failed to save {clean_url}: {e}")
 
     print(f"🎉 Total new articles saved: {total_articles_saved}")
 
+# === Process and Save Articles ===
+def process_and_save_article(article):
+    """Process article and save with atomic duplicate prevention"""
+    full_text, pub_date, img_urls = get_full_article(article['url'])
+    if not full_text:
+        return False
+
+    # Create document with original fields only
+    doc = {
+        "title": article['title'],
+        "url": article['url'],
+        "content": full_text,
+        "date": pub_date,
+        "images": img_urls
+    }
+
+    # Atomic insert-if-not-exists using URL prefix
+    try:
+        result = collection.update_one(
+            {"url": {"$regex": f"^{re.escape(article['url'].split('?')[0])}"}},
+            {"$setOnInsert": doc},
+            upsert=True
+        )
+        return result.upserted_id is not None
+    except Exception as e:
+        print(f"❌ Database error for {article['url']}: {e}")
+        return False
+    
 # Run the scraper
 scrape_all_sections()
 
