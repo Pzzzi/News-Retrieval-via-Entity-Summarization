@@ -1,3 +1,5 @@
+import re
+import threading
 import requests
 import os
 from bs4 import BeautifulSoup
@@ -120,43 +122,60 @@ def scrape_section(url):
 
 # === Scrape All Sections in Parallel ===
 def scrape_all_sections():
-    """1. Scrape all → 2. Process all → 3. Deduplicate & save"""
-    # Step 1: Scrape everything (no DB checks)
+    """Thread-safe deduplication during scraping"""
+    # Thread-safe storage for URLs
+    seen_urls = set()
+    lock = threading.Lock()
+    total_saved = 0
+
+    def process_article(article):
+        nonlocal total_saved
+        full_text, pub_date, img_urls = get_full_article(article['url'])
+        if not full_text:
+            return
+
+        doc = {
+            "title": article['title'],
+            "url": article['url'],
+            "content": full_text,
+            "date": pub_date,
+            "images": img_urls
+        }
+
+        # Atomic insert with thread-safe URL tracking
+        with lock:
+            clean_url = article['url'].split('?')[0]  # Remove tracking params
+            if clean_url not in seen_urls:
+                result = collection.update_one(
+                    {"url": {"$regex": f"^{re.escape(clean_url)}"}},
+                    {"$setOnInsert": doc},
+                    upsert=True
+                )
+                if result.upserted_id:
+                    seen_urls.add(clean_url)
+                    total_saved += 1
+                    print(f"✅ Saved: {article['title'][:50]}...")
+
+    # Phase 1: Scrape all sections
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-        all_articles = [
-            article 
-            for section_articles in executor.map(scrape_section, URLS)
-            for article in section_articles
-        ]
+        all_articles = []
+        for section_articles in executor.map(scrape_section, URLS):
+            all_articles.extend(section_articles)
 
-    # Step 2: Process content (extract text, dates, images)
+    # Phase 2: Process with thread-safe deduplication
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-        processed = [
-            {**article, "content": full_text, "date": pub_date, "images": img_urls}
-            for article, (full_text, pub_date, img_urls) in zip(
-                all_articles,
-                executor.map(get_full_article, [a["url"] for a in all_articles])  # Fixed missing ]
-            )
-            if full_text  # Only keep articles with valid content
-        ]
+        # Pre-populate seen_urls with existing DB entries
+        existing = collection.find(
+            {"url": {"$in": [a['url'] for a in all_articles]}},
+            {"url": 1}
+        )
+        with lock:
+            seen_urls.update(doc['url'].split('?')[0] for doc in existing)
 
-    # Step 3: Deduplicate against DB and bulk insert
-    if processed:
-        # Single query to check existing URLs
-        existing_urls = {doc["url"] for doc in collection.find(
-            {"url": {"$in": [a["url"] for a in processed]}},
-            {"url": 1}  # Only fetch URLs for efficiency
-        )}
+        # Process articles
+        executor.map(process_article, all_articles)
 
-        new_articles = [a for a in processed if a["url"] not in existing_urls]
-        
-        if new_articles:
-            collection.insert_many(new_articles)  # Bulk insert
-            print(f"✅ Saved {len(new_articles)} new articles")
-        else:
-            print("⏩ All articles already exist in DB")
-    else:
-        print("❌ No valid articles processed")
+    print(f"🎉 Total new articles saved: {total_saved}")
 
 # Run the scraper
 scrape_all_sections()
