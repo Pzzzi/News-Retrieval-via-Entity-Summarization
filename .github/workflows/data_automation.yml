@@ -27,4 +27,4 @@ jobs:
       env:
         MONGO_URI: ${{ secrets.MONGO_URI }}
       run: |
-        python Backend/Database/Mongo/web_scraper.py
+        python Backend/Database/Mongo/bbc_scraper.py
