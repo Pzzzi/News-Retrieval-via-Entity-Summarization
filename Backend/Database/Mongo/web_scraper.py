@@ -3,8 +3,6 @@ import os
 from bs4 import BeautifulSoup
 from pymongo import MongoClient
 import concurrent.futures  # For parallel requests
-import time
-import re
 from dotenv import load_dotenv
 from dateutil import parser  # To parse date strings into datetime objects
 
@@ -106,102 +104,59 @@ def get_full_article(article_url):
 
 # === Scrape Section for Article Links ===
 def scrape_section(url):
-    """Scrapes article titles & URLs from BBC section pages."""
+    """Scrape WITHOUT database checks"""
     try:
         response = requests.get(url, headers=headers, timeout=10)
-        if response.status_code != 200:
-            print(f"⚠️ Skipping {url}, status code: {response.status_code}")
-            return []
-
         soup = BeautifulSoup(response.text, "html.parser")
-        articles = soup.find_all("a", href=True)
-        article_list = []
-
-        for article in articles:
-            title_tag = article.find("h3") or article.find("h2")
-            if title_tag:
-                title = title_tag.text.strip()
-                link = f"https://www.bbc.com{article['href']}" if article['href'].startswith("/") else article['href']
-
-                # Skip if the article already exists in MongoDB
-                if collection.count_documents({"url": link}) == 0:
-                    article_list.append({"title": title, "url": link})
-        return article_list
+        return [
+            {"title": (article.find("h3") or article.find("h2")).text.strip(),
+             "url": f"https://www.bbc.com{article['href']}" if article['href'].startswith("/") else article['href']}
+            for article in soup.find_all("a", href=True)
+            if article.find("h3") or article.find("h2")
+        ]
     except Exception as e:
         print(f"❌ Error scraping {url}: {e}")
         return []
 
 # === Scrape All Sections in Parallel ===
 def scrape_all_sections():
-    """Main scraping function with enhanced deduplication"""
-    total_articles_saved = 0
-    
-    # First pass: Collect all article links with URL cleaning
+    """1. Scrape all → 2. Process all → 3. Deduplicate & save"""
+    # Step 1: Scrape everything (no DB checks)
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-        future_to_url = {executor.submit(scrape_section, url): url for url in URLS}
-        unique_articles = {}
-        
-        for future in concurrent.futures.as_completed(future_to_url):
-            try:
-                section_articles = future.result()
-                for article in section_articles:
-                    # Clean URL by removing tracking parameters and fragments
-                    clean_url = article['url'].split('?')[0].split('#')[0]
-                    if clean_url not in unique_articles:
-                        unique_articles[clean_url] = article
-            except Exception as e:
-                print(f"❌ Section error: {e}")
+        all_articles = [
+            article 
+            for section_articles in executor.map(scrape_section, URLS)
+            for article in section_articles
+        ]
 
-    # Second pass: Process and save articles with atomic checks
+    # Step 2: Process content (extract text, dates, images)
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-        future_to_url = {}
+        processed = [
+            {**article, "content": full_text, "date": pub_date, "images": img_urls}
+            for article, (full_text, pub_date, img_urls) in zip(
+                all_articles,
+                executor.map(get_full_article, [a["url"] for a in all_articles])  # Fixed missing ]
+            )
+            if full_text  # Only keep articles with valid content
+        ]
+
+    # Step 3: Deduplicate against DB and bulk insert
+    if processed:
+        # Single query to check existing URLs
+        existing_urls = {doc["url"] for doc in collection.find(
+            {"url": {"$in": [a["url"] for a in processed]}},
+            {"url": 1}  # Only fetch URLs for efficiency
+        )}
+
+        new_articles = [a for a in processed if a["url"] not in existing_urls]
         
-        for clean_url, article in unique_articles.items():
-            # Check MongoDB using URL prefix before processing
-            if not collection.find_one({"url": {"$regex": f"^{re.escape(clean_url)}"}}):
-                future = executor.submit(process_and_save_article, article)
-                future_to_url[future] = clean_url
+        if new_articles:
+            collection.insert_many(new_articles)  # Bulk insert
+            print(f"✅ Saved {len(new_articles)} new articles")
+        else:
+            print("⏩ All articles already exist in DB")
+    else:
+        print("❌ No valid articles processed")
 
-        for future in concurrent.futures.as_completed(future_to_url):
-            clean_url = future_to_url[future]
-            try:
-                if future.result():
-                    total_articles_saved += 1
-            except Exception as e:
-                print(f"❌ Failed to save {clean_url}: {e}")
-
-    print(f"🎉 Total new articles saved: {total_articles_saved}")
-
-# === Process and Save Articles ===
-def process_and_save_article(article):
-    """Process article and save with atomic duplicate prevention"""
-    full_text, pub_date, img_urls = get_full_article(article['url'])
-    if not full_text:
-        return False
-
-    # Create document with original fields only
-    doc = {
-        "title": article['title'],
-        "url": article['url'],
-        "content": full_text,
-        "date": pub_date,
-        "images": img_urls
-    }
-
-    # Atomic insert-if-not-exists using URL prefix
-    try:
-        result = collection.update_one(
-            {"url": {"$regex": f"^{re.escape(article['url'].split('?')[0])}"}},
-            {"$setOnInsert": doc},
-            upsert=True
-        )
-        return result.upserted_id is not None
-    except Exception as e:
-        print(f"❌ Database error for {article['url']}: {e}")
-        return False
-    
 # Run the scraper
 scrape_all_sections()
-
-
-
