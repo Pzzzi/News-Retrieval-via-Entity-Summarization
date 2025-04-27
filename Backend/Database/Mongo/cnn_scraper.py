@@ -15,7 +15,7 @@ load_dotenv()
 MONGO_URI = os.getenv("MONGO_URI")
 client     = MongoClient(MONGO_URI)
 db         = client["news_db"]
-collection = db["test_articles"]
+collection = db["articles"]
 
 # ====== CNN URLs ======
 URLS = [
