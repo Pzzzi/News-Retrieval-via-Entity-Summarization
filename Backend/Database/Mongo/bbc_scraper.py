@@ -1,19 +1,20 @@
+import os
 import re
 import threading
 import requests
-import os
+from datetime import datetime
 from bs4 import BeautifulSoup
 from pymongo import MongoClient
-import concurrent.futures  # For parallel requests
+import concurrent.futures
 from dotenv import load_dotenv
-from dateutil import parser  # To parse date strings into datetime objects
+from dateutil import parser
 
 load_dotenv()
 
 # ====== MongoDB Connection ======
-MONGO_URI = os.getenv("MONGO_URI")
-client = MongoClient(MONGO_URI)
-db = client["news_db"]
+MONGO_URI  = os.getenv("MONGO_URI")
+client     = MongoClient(MONGO_URI)
+db         = client["news_db"]
 collection = db["articles"]
 
 # ====== BBC News URLs ======
@@ -28,154 +29,134 @@ URLS = [
 ]
 
 headers = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/91.0.4472.124 Safari/537.36"
+    )
 }
 
-def is_placeholder_image(img_url):
-    """Check if the image URL is a placeholder."""
-    if not img_url:
-        return True
-    placeholder_strings = [
-        "grey-placeholder.png",
-        "/bbcx/grey-placeholder.png",
-        "https://www.bbc.com/bbcx/grey-placeholder.png"
-    ]
-    return any(placeholder in img_url for placeholder in placeholder_strings)
-
-# === Extract Full Article Text + Date + Images ===
-def get_full_article(article_url):
-    """Fetches full article text, publication date, and images from BBC."""
-    try:
-        response = requests.get(article_url, headers=headers, timeout=10)
-        if response.status_code != 200:
-            return None, None, []
-
-        soup = BeautifulSoup(response.text, "html.parser")
-
-        # Extract article text
-        article_tag = soup.find("article")
-        if not article_tag:
-            return None, None, []
-
-        paragraphs = article_tag.find_all("p")
-        full_text = "\n".join([p.text.strip() for p in paragraphs if p.text.strip()])
-
-        # Extract publication date (BBC articles use <time> tag)
-        date_tag = soup.find("time")
-        pub_date = date_tag["datetime"] if date_tag and "datetime" in date_tag.attrs else None
-
-        # Parse date string into datetime object (if valid)
-        if pub_date:
-            try:
-                pub_date = parser.parse(pub_date)  # Convert to datetime object
-            except Exception as e:
-                print(f"❌ Failed to parse date for {article_url}: {e}")
-                pub_date = None
-
-        # Extract images (look for <figure> tags and grab <img> tag inside them)
-        img_urls = set()
-        
-        # Find all images within the article
-        for img in article_tag.find_all('img'):
-            # Check src attribute first
-            if img.get('src'):
-                img_url = img['src']
-                if not is_placeholder_image(img_url):
-                    img_urls.add(img_url)
-            
-            # Check srcset if exists
-            if img.get('srcset'):
-                # Get all URLs from srcset (take the first part before space)
-                for src in img['srcset'].split(','):
-                    src_url = src.strip().split(' ')[0]
-                    if src_url and not is_placeholder_image(src_url):
-                        img_urls.add(src_url)
-        
-        # Convert to absolute URLs and filter out data URIs
-        final_img_urls = [
-            f'https://www.bbc.com{url}' if url.startswith('/') else url
-            for url in img_urls
-            if not url.startswith('data:')  # Skip data URIs
-        ]
-
-        return full_text if full_text else None, pub_date, final_img_urls
-
-    except Exception as e:
-        print(f"❌ Error fetching article {article_url}: {e}")
-        return None, None, []
-
-# === Scrape Section for Article Links ===
 def scrape_section(url):
-    """Scrape WITHOUT database checks"""
+    """Phase 1: gather all article URLs from a section."""
     try:
-        response = requests.get(url, headers=headers, timeout=10)
-        soup = BeautifulSoup(response.text, "html.parser")
-        return [
-            {"title": (article.find("h3") or article.find("h2")).text.strip(),
-             "url": f"https://www.bbc.com{article['href']}" if article['href'].startswith("/") else article['href']}
-            for article in soup.find_all("a", href=True)
-            if article.find("h3") or article.find("h2")
-        ]
+        print(f"🔍 Scraping section: {url}")
+        r = requests.get(url, headers=headers, timeout=10)
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, "html.parser")
+
+        out = []
+        for a in soup.find_all("a", href=True):
+            # BBC index pages wrap headlines in <h3> or <h2>
+            if a.find("h3") or a.find("h2"):
+                href = a["href"]
+                if href.startswith("/"):
+                    href = "https://www.bbc.com" + href
+                out.append({"url": href})
+        print(f"✅ Found {len(out)} articles in {url}")
+        return out
+
     except Exception as e:
         print(f"❌ Error scraping {url}: {e}")
         return []
 
-# === Scrape All Sections in Parallel ===
-def scrape_all_sections():
-    """Thread-safe deduplication during scraping"""
-    # Thread-safe storage for URLs
-    seen_urls = set()
-    lock = threading.Lock()
-    total_saved = 0
+def get_full_article(article):
+    """Phase 2: fetch each article page & upsert into Mongo."""
+    url = article["url"]
 
-    def process_article(article):
-        nonlocal total_saved
-        full_text, pub_date, img_urls = get_full_article(article['url'])
-        if not full_text:
+    try:
+        r = requests.get(url, headers=headers, timeout=10)
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, "html.parser")
+
+        # --- TITLE ---
+        # BBC uses <h1> for headline
+        h1 = soup.find("h1")
+        title = h1.get_text(strip=True) if h1 and h1.text.strip() else None
+
+        # --- DATE ---
+        # Look for <time datetime="...">
+        time_tag = soup.find("time")
+        pub_date = None
+        if time_tag and time_tag.has_attr("datetime"):
+            try:
+                dt = parser.parse(time_tag["datetime"])
+                pub_date = dt  # tz‐aware or naive depending on string
+            except Exception:
+                pub_date = None
+
+        # --- CONTENT ---
+        # BBC wraps main text in <article>…<p>
+        article_tag = soup.find("article")
+        paras = article_tag.find_all("p") if article_tag else []
+        content = "\n".join(p.get_text(strip=True) for p in paras if p.get_text(strip=True))
+
+        # --- IMAGES ---
+        # Collect all <img> src/srcset inside <article>
+        img_urls = set()
+        if article_tag:
+            for img in article_tag.find_all("img"):
+                src = img.get("src") or ""
+                if src.startswith("http"):
+                    img_urls.add(src)
+                # also handle srcset
+                for candidate in img.get("srcset", "").split(","):
+                    url_part = candidate.strip().split(" ")[0]
+                    if url_part.startswith("http"):
+                        img_urls.add(url_part)
+
+        # Skip if missing essential data
+        if not title or not content:
+            print(f"⚠️ Skipping (no title/content): {url}")
             return
 
         doc = {
-            "title": article['title'],
-            "url": article['url'],
-            "content": full_text,
-            "date": pub_date,
-            "images": img_urls
+            "title":   title,
+            "url":     url,
+            "content": content,
+            "date":    pub_date,
+            "images":  list(img_urls)
         }
 
-        # Atomic insert with thread-safe URL tracking
-        with lock:
-            clean_url = article['url'].split('?')[0]  # Remove tracking params
-            if clean_url not in seen_urls:
-                result = collection.update_one(
-                    {"url": {"$regex": f"^{re.escape(clean_url)}"}},
-                    {"$setOnInsert": doc},
-                    upsert=True
-                )
-                if result.upserted_id:
-                    seen_urls.add(clean_url)
-                    total_saved += 1
-                    print(f"✅ Saved: {article['title'][:50]}...")
-
-    # Phase 1: Scrape all sections
-    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-        all_articles = []
-        for section_articles in executor.map(scrape_section, URLS):
-            all_articles.extend(section_articles)
-
-    # Phase 2: Process with thread-safe deduplication
-    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-        # Pre-populate seen_urls with existing DB entries
-        existing = collection.find(
-            {"url": {"$in": [a['url'] for a in all_articles]}},
-            {"url": 1}
+        # atomic upsert by clean URL (strip query & trailing slash)
+        clean = re.escape(url.split("?")[0].rstrip("/"))
+        res = collection.update_one(
+            {"url": {"$regex": f"^{clean}$"}},
+            {"$setOnInsert": doc},
+            upsert=True
         )
-        with lock:
-            seen_urls.update(doc['url'].split('?')[0] for doc in existing)
+        if res.upserted_id:
+            print(f"✅ Saved: {title[:50]}…")
+    except Exception as e:
+        print(f"❌ Error processing {url}: {e}")
 
-        # Process articles
-        executor.map(process_article, all_articles)
+def scrape_all_sections():
+    """Orchestrate two‐phase parallel scrape & ingest for BBC."""
+    seen = set()
 
-    print(f"🎉 Total new articles saved: {total_saved}")
+    # Phase 1: gather URLs in parallel
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as exec1:
+        all_lists    = exec1.map(scrape_section, URLS)
+        all_articles = [item for sub in all_lists for item in sub]
 
-# Run the scraper
-scrape_all_sections()
+    if not all_articles:
+        print("⚠️ No articles found at all!")
+        return
+
+    print(f"✅ Total URLs gathered: {len(all_articles)} across {len(URLS)} sections")
+
+    # Deduplicate URLs
+    unique = []
+    for art in all_articles:
+        clean = art["url"].split("?")[0].rstrip("/")
+        if clean not in seen:
+            seen.add(clean)
+            unique.append(art)
+
+    # Phase 2: fetch & insert in parallel
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as exec2:
+        exec2.map(get_full_article, unique)
+
+    print("🎉 BBC scraping complete.")
+
+if __name__ == "__main__":
+    scrape_all_sections()
