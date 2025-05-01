@@ -1,19 +1,16 @@
-import os 
 from pymongo import MongoClient
+import os
 from dotenv import load_dotenv
 
 load_dotenv()
 
 # Connect to MongoDB
-MONGO_URI=os.getenv("MONGO_URI")
-client = MongoClient(MONGO_URI)
+client = MongoClient(os.getenv("MONGO_URI"))
 db = client["news_db"]
-collection = db["articles"]
 
-# Field to remove
-field_to_remove = "images"  # Change this to the field you want to delete
+# Delete all documents with Guardian URLs
+result = db.articles.delete_many({
+    "url": {"$regex": "^https://www.theguardian.com/"}
+})
 
-# Update all documents to remove the field
-result = collection.update_many({}, {"$unset": {field_to_remove: ""}})
-
-print(f"✅ {result.modified_count} documents updated. '{field_to_remove}' field removed.")
+print(f"Deleted {result.deleted_count} documents from 'articles' collection")

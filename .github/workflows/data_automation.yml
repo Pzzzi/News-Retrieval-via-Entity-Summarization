@@ -43,3 +43,24 @@ jobs:
         run: |
           set -e
           python Backend/Database/Mongo/cnn_scraper.py
+
+      - name: Run Al-Jazeera scraper
+        env:
+          MONGO_URI: ${{ secrets.MONGO_URI }}
+        run: |
+          set -e
+          python Backend/Database/Mongo/aljazeera_scraper.py
+
+      - name: Run The Guardian scraper
+        env:
+          MONGO_URI: ${{ secrets.MONGO_URI }}
+        run: |
+          set -e
+          python Backend/Database/Mongo/theguardian_scraper.py
+
+      - name: Run AP News scraper
+        env:
+          MONGO_URI: ${{ secrets.MONGO_URI }}
+        run: |
+          set -e
+          python Backend/Database/Mongo/apnews_scraper.py
