@@ -147,12 +147,13 @@ def scrape_all_sections():
             seen.add(clean)
             unique.append(art)
 
+    print(f"🔎 Total unique articles to process: {len(unique)}")
+
     # Phase 2: fetch & insert
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as exec2:
         exec2.map(get_full_article, unique)
 
-    total = collection.count_documents({"url": {"$regex": "^https://edition.cnn.com"}})
-    print(f"🗞️ Total CNN articles in MongoDB: {total}")
+    print(f"✅ Scraping finished. Total articles processed: {len(unique)}")
     print("🎉 CNN scraping complete.")
 
 if __name__ == "__main__":
