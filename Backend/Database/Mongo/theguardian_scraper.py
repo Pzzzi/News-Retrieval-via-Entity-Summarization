@@ -145,9 +145,12 @@ def get_full_article(article):
         )
         if res.upserted_id:
             print(f"✅ Saved: {title[:60]}...")
+            return True
+        return False
 
     except Exception as e:
         print(f"❌ Error processing article {url}: {e}")
+        return False
 
 def scrape_all_sections():
     seen = set()
@@ -170,9 +173,10 @@ def scrape_all_sections():
     print(f"🔎 Total unique articles to process: {len(unique)}")
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as exec2:
-        exec2.map(get_full_article, unique)
+        results = list(exec2.map(get_full_article, unique))
 
-    print(f"✅ Scraping finished. Total articles scraped: {len(unique)}")
+    saved_count = sum(1 for r in results if r)
+    print(f"✅ Scraping finished. Articles saved: {saved_count} / {len(unique)}")
     print("🎉 The Guardian scraping complete.")
 
 if __name__ == "__main__":

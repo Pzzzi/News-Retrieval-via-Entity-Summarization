@@ -69,45 +69,39 @@ def get_full_article(article):
         soup = BeautifulSoup(r.text, "html.parser")
 
         # --- TITLE ---
-        # BBC uses <h1> for headline
         h1 = soup.find("h1")
         title = h1.get_text(strip=True) if h1 and h1.text.strip() else None
 
         # --- DATE ---
-        # Look for <time datetime="...">
         time_tag = soup.find("time")
         pub_date = None
         if time_tag and time_tag.has_attr("datetime"):
             try:
                 dt = parser.parse(time_tag["datetime"])
-                pub_date = dt  # tz‐aware or naive depending on string
+                pub_date = dt
             except Exception:
                 pub_date = None
 
         # --- CONTENT ---
-        # BBC wraps main text in <article>…<p>
         article_tag = soup.find("article")
         paras = article_tag.find_all("p") if article_tag else []
         content = "\n".join(p.get_text(strip=True) for p in paras if p.get_text(strip=True))
 
         # --- IMAGES ---
-        # Collect all <img> src/srcset inside <article>
         img_urls = set()
         if article_tag:
             for img in article_tag.find_all("img"):
                 src = img.get("src") or ""
                 if src.startswith("http"):
                     img_urls.add(src)
-                # also handle srcset
                 for candidate in img.get("srcset", "").split(","):
                     url_part = candidate.strip().split(" ")[0]
                     if url_part.startswith("http"):
                         img_urls.add(url_part)
 
-        # Skip if missing essential data
         if not title or not content:
             print(f"⚠️ Skipping (no title/content): {url}")
-            return
+            return False
 
         doc = {
             "title":   title,
@@ -117,7 +111,6 @@ def get_full_article(article):
             "images":  list(img_urls)
         }
 
-        # atomic upsert by clean URL (strip query & trailing slash)
         clean = re.escape(url.split("?")[0].rstrip("/"))
         res = collection.update_one(
             {"url": {"$regex": f"^{clean}$"}},
@@ -126,8 +119,12 @@ def get_full_article(article):
         )
         if res.upserted_id:
             print(f"✅ Saved: {title[:50]}…")
+            return True
+        return False
+
     except Exception as e:
         print(f"❌ Error processing {url}: {e}")
+        return False
 
 def scrape_all_sections():
     """Orchestrate two‐phase parallel scrape & ingest for BBC."""
@@ -156,9 +153,10 @@ def scrape_all_sections():
 
     # Phase 2: fetch & insert in parallel
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as exec2:
-        exec2.map(get_full_article, unique)
+        results = list(exec2.map(get_full_article, unique))
 
-    print(f"✅ Scraping finished. Total articles processed: {len(unique)}")
+    saved_count = sum(1 for r in results if r)
+    print(f"✅ Scraping finished. Articles saved: {saved_count} / {len(unique)}")
     print("🎉 BBC scraping complete.")
 
 if __name__ == "__main__":

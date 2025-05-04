@@ -58,9 +58,9 @@ jobs:
           set -e
           python Backend/Database/Mongo/theguardian_scraper.py
 
-      - name: Run AP News scraper
+      - name: Run Sky News scraper
         env:
           MONGO_URI: ${{ secrets.MONGO_URI }}
         run: |
           set -e
-          python Backend/Database/Mongo/apnews_scraper.py
+          python Backend/Database/Mongo/skynews_scraper.py

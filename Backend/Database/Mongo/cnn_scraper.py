@@ -122,10 +122,13 @@ def get_full_article(article):
         )
         if res.upserted_id:
             print(f"✅ Saved: {title[:50]}...")
+            return True
+        return False
 
     except Exception as e:
         print(f"❌ Error processing {url}: {e}")
-
+        return False
+    
 def scrape_all_sections():
     """Orchestrate two‐phase parallel scrape & ingest."""
     seen = set()
@@ -151,9 +154,10 @@ def scrape_all_sections():
 
     # Phase 2: fetch & insert
     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as exec2:
-        exec2.map(get_full_article, unique)
+        results = list(exec2.map(get_full_article, unique))
 
-    print(f"✅ Scraping finished. Total articles processed: {len(unique)}")
+    saved_count = sum(1 for r in results if r)
+    print(f"✅ Scraping finished. Articles saved: {saved_count} / {len(unique)}")
     print("🎉 CNN scraping complete.")
 
 if __name__ == "__main__":
