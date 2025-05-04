@@ -1,5 +1,7 @@
 import os
+import random
 import re
+import time
 import requests
 from datetime import datetime
 from bs4 import BeautifulSoup
@@ -51,6 +53,8 @@ def scrape_section(url):
         print(f"🔍 Scraping section: {url}")
         r = requests.get(url, headers=headers, timeout=10)
         r.raise_for_status()
+        time.sleep(random.uniform(1, 2))
+
         soup = BeautifulSoup(r.text, "html.parser")
 
         out = []
@@ -73,6 +77,7 @@ def get_full_article(article):
     try:
         r = requests.get(url, headers=headers, timeout=10)
         r.raise_for_status()
+        time.sleep(random.uniform(1, 2))
         soup = BeautifulSoup(r.text, "html.parser")
 
         # --- Title ---
@@ -236,7 +241,7 @@ def scrape_all_sections():
     
     print(f"🔎 Total unique articles to process: {len(unique)}")
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as exec2:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as exec2:
         exec2.map(get_full_article, unique)
 
     print(f"✅ Scraping finished. Total articles scraped: {len(unique)}")
