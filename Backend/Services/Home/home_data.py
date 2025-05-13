@@ -22,17 +22,15 @@ def get_recent_articles(limit=10):
             "date": 1,
             "_id": 1,
             "images": 1,
-            "entities": {"$slice": ["$entities", 3]}  # Get first 3 entities
+            # slice the entities array if present
+            "entities": {"$slice": ["$entities", 3]}
         }}
     ]
-    
     articles = list(collection.aggregate(pipeline))
 
     def select_best_image(images):
         if not images:
             return None
-            
-        # Priority order for BBC images (adjust for your sources)
         resolutions = ['1536', '1024', '800', '640', '480']
         for res in resolutions:
             for img in images:
@@ -40,14 +38,20 @@ def get_recent_articles(limit=10):
                     return img
         return images[0]
 
-    return [{
-        "_id": str(article["_id"]),
-        "title": article["title"],
-        "url": article["url"],
-        "date": article["date"],
-        "image": select_best_image(article.get("images")),
-        "entities": [e["text"] for e in article.get("entities", [])]
-    } for article in articles]
+    cleaned = []
+    for article in articles:
+        raw_entities = article.get("entities") or []      # -> [] if missing or empty
+        # if your documents actually use "entity" (singular), do:
+        # raw_entities = article.get("entity") or []
+        cleaned.append({
+            "_id": str(article["_id"]),
+            "title": article["title"],
+            "url": article["url"],
+            "date": article["date"],
+            "image": select_best_image(article.get("images") or []),
+            "entities": [e.get("text") for e in raw_entities if isinstance(e, dict) and "text" in e]
+        })
+    return cleaned
 
 def get_popular_entities(limit=5):
     """Fetch most frequently mentioned entities"""
@@ -67,7 +71,6 @@ def get_popular_entities(limit=5):
             "_id": 0
         }}
     ]
-    
     return list(collection.aggregate(pipeline))
 
 def get_homepage_data():

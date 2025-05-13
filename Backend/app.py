@@ -50,6 +50,7 @@ def fetch_entity_summary_titles(entity_name):
 
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=True, use_reloader=False)
+
 
 

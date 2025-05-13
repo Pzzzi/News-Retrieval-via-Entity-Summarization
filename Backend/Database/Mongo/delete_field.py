@@ -8,9 +8,10 @@ load_dotenv()
 client = MongoClient(os.getenv("MONGO_URI"))
 db = client["news_db"]
 
-# Delete all documents with Guardian URLs
-result = db.articles.delete_many({
-    "url": {"$regex": "^https://www.theguardian.com/"}
-})
+# Remove the "entities" field from all documents
+result = db.articles.update_many(
+    {},  # Empty filter matches all documents
+    {"$unset": {"entities": ""}}  # $unset removes the field
+)
 
-print(f"Deleted {result.deleted_count} documents from 'articles' collection")
+print(f"Removed 'entities' field from {result.modified_count} documents in 'articles' collection")
