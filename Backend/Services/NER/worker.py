@@ -33,4 +33,3 @@ dataset = load_dataset("conll2003", trust_remote_code=True)
 convert_split(dataset["train"], "train.spacy")
 convert_split(dataset["validation"], "dev.spacy")
 convert_split(dataset["test"], "test.spacy")
-

@@ -1,79 +1,86 @@
 import spacy
-import re
+from spacy_entity_linker import EntityLinker
+from pymongo import MongoClient, UpdateMany, ASCENDING
+from tqdm import tqdm
+import os
+from dotenv import load_dotenv
 
-# Load spaCy English NER model
+load_dotenv()
+
+# Initialize NLP pipeline
 nlp = spacy.load("en_core_web_sm")
+nlp.add_pipe("entityLinker", last=True)
 
-# Define unwanted labels for filtering
-UNWANTED_LABELS = {"CARDINAL", "ORDINAL", "QUANTITY", "PERCENT", "MONEY", "TIME", "DATE"}
+# MongoDB setup with indexing
+client = MongoClient(os.getenv("MONGO_URI"))
+db = client["news_db"]
+collection = db["test_articles"]
 
-# Sample test articles
-test_articles = [
-    {
-        "title": "Trump speaks in New York",
-        "content": "Donald Trump gave a speech in New York on Tuesday. He said the economy is booming with a $350bn budget. Donald Trump's, he is free."
-    },
-    {
-        "title": "Numbers in the news",
-        "content": "123 people attended. First responders were present. Total cost: $2 million. It happened on January 5th."
-    },
-    {
-        "title": "Mixed Entities",
-        "content": "Apple's CEO Tim Cook visited the White House. Apple's shares rose by 3%."
-    }
-]
-
-# --- Cleaning Functions ---
-
-def filter_entities(entities):
-    """Filter out noisy/unwanted entities."""
-    return [
-        ent for ent in entities
-        if ent["label"] not in UNWANTED_LABELS
-        and not ent["text"].strip().isdigit()
-        and len(ent["text"].strip()) > 2
-    ]
-
-def normalize_text(text):
-    """Normalize entity text."""
-    text = text.lower().strip()
-    text = re.sub(r"'s\b", "", text)
-    text = re.sub(r"[^\w\s]", "", text)
-    text = re.sub(r"\s+", " ", text)
-    return text.title()
-
-def deduplicate_entities(entities):
-    """Remove duplicates after normalization."""
-    seen = set()
-    cleaned = []
-    for ent in entities:
-        norm_text = normalize_text(ent["text"])
-        key = (norm_text, ent["label"])
-        if key not in seen:
-            seen.add(key)
-            cleaned.append({"text": norm_text, "label": ent["label"]})
-    return cleaned
-
-def clean_entities(raw_entities):
-    """Complete filter + normalize + deduplicate pipeline."""
-    filtered = filter_entities(raw_entities)
-    cleaned = deduplicate_entities(filtered)
-    return cleaned
-
-# --- Run Test ---
-
-for article in test_articles:
-    text = article["content"]
+def extract_filtered_entities(text):
+    """Extract entities with valid NER labels only"""
     doc = nlp(text)
-    raw_entities = [{"text": ent.text, "label": ent.label_} for ent in doc.ents]
-    cleaned_entities = clean_entities(raw_entities)
+    entities = []
+    seen_texts = set()
 
-    print(f"\n📰 Title: {article['title']}")
-    print("🔍 Raw Entities:")
-    for ent in raw_entities:
-        print(f"   - {ent}")
-    print("✅ Cleaned Entities:")
-    for ent in cleaned_entities:
-        print(f"   - {ent}")
+    for linked_ent in doc._.linkedEntities:
+        span = linked_ent.get_span()
+
+        if span.text.lower() in seen_texts:
+            continue
+        seen_texts.add(span.text.lower())
+
+        matching_ner = next(
+            (ent for ent in doc.ents 
+             if ent.start == span.start and ent.end == span.end),
+            None
+        )
+
+        if matching_ner:
+            entities.append({
+                "text": span.text,
+                "type": matching_ner.label_,
+                "wikidata_id": linked_ent.get_id(),
+                "wikidata_url": linked_ent.get_url(),
+                "description": linked_ent.get_description(),
+                "label": linked_ent.get_label()
+            })
+
+    return entities
+
+def process_collection():
+    """Process articles with batch updates and progress tracking"""
+    query = {"entities": {"$exists": False}, "content": {"$exists": True, "$ne": ""}}
+    total = collection.count_documents(query)
+
+    with tqdm(total=total, desc="Processing Articles") as pbar:
+        batch_size = 200
+        for i in range(0, total, batch_size):
+            batch = list(collection.find(query).skip(i).limit(batch_size))
+            if not batch:
+                break
+
+            texts = [doc["content"] for doc in batch]
+            docs = nlp.pipe(texts, batch_size=50)
+
+            updates = []
+            for doc, article in zip(docs, batch):
+                entities = extract_filtered_entities(doc.text)
+                if entities:
+                    updates.append(
+                        UpdateMany(
+                            {"_id": article["_id"]},
+                            {"$set": {"entities": entities}}
+                        )
+                    )
+                pbar.update(1)
+
+            if updates:
+                collection.bulk_write(updates, ordered=False)
+
+if __name__ == "__main__":
+    process_collection()
+    print("Processing complete! Only entities with NER labels were saved.")
+
+
 
 
