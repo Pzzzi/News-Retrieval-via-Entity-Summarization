@@ -61,12 +61,12 @@ function Home() {
           <div className="flex flex-wrap gap-3">
             {homeData.popular_entities.map((entity) => (
               <button
-                key={entity.name}
+                key={entity.normalized_label}
                 className="bg-gray-100 hover:bg-gray-200 rounded-full px-4 py-2 
                            flex items-center gap-2 transition-all hover:-translate-y-0.5"
-                onClick={() => handleSearch(entity.name)}
+                onClick={() => handleSearch(entity.normalized_label)}
               >
-                {entity.name}
+                {entity.normalized_label}
                 <span className="bg-blue-600 text-white rounded-full px-2 text-sm">
                   {entity.count}
                 </span>
@@ -86,7 +86,15 @@ function Home() {
             {homeData.recent_articles.map((article) => (
               <ArticleCard
                 key={article._id}
-                article={article}
+                article={{
+                  ...article,
+                  // Make sure ArticleCard gets the correct props
+                  id: article._id,
+                  entities: article.entities.map(e => ({
+                    name: e.normalized_label,
+                    type: e.type
+                  }))
+                }}
                 onClick={() => navigate(`/article/${article._id}`)}
               />
             ))}

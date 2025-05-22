@@ -16,29 +16,29 @@ const SearchBar = ({ onSearchSelect }) => {
       }
 
       try {
-        const res = await axios.get(`http://127.0.0.1:5000/suggest?q=${query}`);
-        setSuggestions(res.data.results);
+        const res = await axios.get(`http://127.0.0.1:5000/suggest?q=${encodeURIComponent(query)}`);
+        // Directly use res.data.results without additional nesting
+        setSuggestions(res.data.results || []);
       } catch (err) {
         console.error('Error fetching suggestions:', err);
+        setSuggestions([]);
       }
     };
 
-    const delayDebounce = setTimeout(fetchSuggestions, 300);
-    return () => clearTimeout(delayDebounce);
-  }, [query]);
+  const delayDebounce = setTimeout(fetchSuggestions, 300);
+  return () => clearTimeout(delayDebounce);
+}, [query]);
 
-  const handleSelect = (text) => {
-    const encodedEntity = encodeURIComponent(text);
+  const handleSelect = (entity) => {
+    const encodedEntity = encodeURIComponent(entity.label || entity.text);
     setQuery('');
     setSuggestions([]);
     setShowSuggestions(false);
     
-    // Navigate to search results page
     navigate(`/search/${encodedEntity}`);
     
-    // Optional: Call parent component's handler if provided
     if (onSearchSelect) {
-      onSearchSelect(text);
+      onSearchSelect(entity);
     }
   };
 
@@ -59,21 +59,31 @@ const SearchBar = ({ onSearchSelect }) => {
       {showSuggestions && suggestions.length > 0 && (
         <ul className="absolute z-10 w-full mt-1 bg-white border border-gray-200 
                       rounded-lg shadow-lg max-h-60 overflow-y-auto">
-          {suggestions.map((s, index) => (
+          {suggestions.map((suggestion, index) => (
             <li 
-              key={index} 
+              key={`${suggestion.text}-${index}`} 
               className="px-4 py-2 hover:bg-gray-100 cursor-pointer transition-colors
                         flex items-center border-b border-gray-100 last:border-b-0"
-              onClick={() => handleSelect(s.text)}
+              onClick={() => handleSelect(suggestion)}
               onMouseDown={(e) => e.preventDefault()} 
             >
               <span className={`px-2 py-1 text-xs rounded-full mr-2
-                ${s.type === 'PERSON' ? 'bg-blue-100 text-blue-800' : 
-                  s.type === 'ORG' ? 'bg-green-100 text-green-800' :
+                ${suggestion.type === 'PERSON' ? 'bg-blue-100 text-blue-800' : 
+                  suggestion.type === 'ORG' ? 'bg-green-100 text-green-800' :
                   'bg-purple-100 text-purple-800'}`}>
-                {s.type}
+                {suggestion.type}
               </span>
-              <span className="truncate">{s.text}</span>
+              <div className="flex-1 min-w-0">
+                <p className="truncate font-medium">{suggestion.text}</p>
+                {suggestion.text !== suggestion.label && (
+                  <p className="truncate text-xs text-gray-500">{suggestion.label}</p>
+                )}
+              </div>
+              {suggestion.count && (
+                <span className="ml-2 px-2 py-1 text-xs bg-gray-100 text-gray-700 rounded-full">
+                  {suggestion.count}
+                </span>
+              )}
             </li>
           ))}
         </ul>

@@ -35,11 +35,11 @@ def home_data():
         return jsonify({"error": str(e)}), 500
 
 # Search bar suggestion
-@app.route("/suggest", methods=["GET"])
-def get_suggestions():
-    query = request.args.get("q", "").strip()
+@app.route('/suggest')
+def suggest():
+    query = request.args.get('q', '')
     suggestions = suggest_entities(query)
-    return jsonify({"results": suggestions})
+    return jsonify(suggestions)  # This will properly format the response
 
 @app.route('/entity_summary_titles/<entity_name>', methods=['GET'])
 def fetch_entity_summary_titles(entity_name):
@@ -48,6 +48,5 @@ def fetch_entity_summary_titles(entity_name):
         return jsonify(summary_data), 404
     return jsonify(summary_data)
 
-
 if __name__ == "__main__":
-    app.run(debug=True, use_reloader=False)
+    app.run(debug=True)

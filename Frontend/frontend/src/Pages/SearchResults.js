@@ -154,6 +154,7 @@ function SearchResults() {
               key={article._id}
               article={article}
               onClick={handleArticleClick}
+              onEntityClick={handleEntityClick}
             />
           ))}
         </div>

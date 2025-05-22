@@ -1,6 +1,6 @@
 import spacy
 from spacy_entity_linker import EntityLinker
-from pymongo import MongoClient, UpdateMany, ASCENDING
+from pymongo import MongoClient, UpdateMany
 from tqdm import tqdm
 import os
 from dotenv import load_dotenv
@@ -8,16 +8,19 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Initialize NLP pipeline
-nlp = spacy.load("en_core_web_sm")
+nlp = spacy.load("en_core_web_trf")
 nlp.add_pipe("entityLinker", last=True)
 
-# MongoDB setup with indexing
+# MongoDB setup
 client = MongoClient(os.getenv("MONGO_URI"))
 db = client["news_db"]
 collection = db["test_articles"]
 
+# Entity types to exclude
+EXCLUDED_TYPES = {"CARDINAL", "DATE", "PRODUCT"}
+
 def extract_filtered_entities(text):
-    """Extract entities with valid NER labels only"""
+    """Extract entities with valid NER labels and Wikidata linking"""
     doc = nlp(text)
     entities = []
     seen_texts = set()
@@ -31,7 +34,7 @@ def extract_filtered_entities(text):
 
         matching_ner = next(
             (ent for ent in doc.ents 
-             if ent.start == span.start and ent.end == span.end),
+             if ent.start == span.start and ent.end == span.end and ent.label_ not in EXCLUDED_TYPES),
             None
         )
 
@@ -48,7 +51,7 @@ def extract_filtered_entities(text):
     return entities
 
 def process_collection():
-    """Process articles with batch updates and progress tracking"""
+    """Process articles in MongoDB and attach entity information"""
     query = {"entities": {"$exists": False}, "content": {"$exists": True, "$ne": ""}}
     total = collection.count_documents(query)
 
@@ -60,7 +63,7 @@ def process_collection():
                 break
 
             texts = [doc["content"] for doc in batch]
-            docs = nlp.pipe(texts, batch_size=50)
+            docs = nlp.pipe(texts, batch_size=8)  # Smaller batch due to transformer memory use
 
             updates = []
             for doc, article in zip(docs, batch):
@@ -79,7 +82,8 @@ def process_collection():
 
 if __name__ == "__main__":
     process_collection()
-    print("Processing complete! Only entities with NER labels were saved.")
+    print("✅ Processing complete!")
+
 
 
 
