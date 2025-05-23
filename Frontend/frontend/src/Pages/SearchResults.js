@@ -116,10 +116,6 @@ function SearchResults() {
   return (
     <div className="container mx-auto px-4 py-8">
       <div className="mb-8">
-        <h3 className="text-2xl font-bold text-gray-800 mb-2">
-          Results for: <span className="text-blue-600">{data.entity.id}</span>
-        </h3>
-        
         {/* Entity Summary Section */}
         {summaryLoading ? (
           <div className="bg-blue-50 rounded-lg p-4 mb-6 animate-pulse">
@@ -130,18 +126,27 @@ function SearchResults() {
         ) : summary ? (
           <div className="bg-gray-50 rounded-lg p-6 mb-6 border border-gray-200">
             <h4 className="text-lg font-semibold text-gray-800 mb-3">
-              Summary about <span className="text-blue-600">{data.entity.id}</span>
+              Things on-going for <span className="text-blue-600">{data.entity.id}</span>
             </h4>
             <p className="text-gray-700 leading-relaxed">{summary}</p>
           </div>
         ) : null}
 
-        <EntityGraph
-          entity={data.entity}
-          relatedEntities={data.related_entities}
-          links={data.links}
-          onEntityClick={handleEntityClick}
-        />
+        <div className="mb-8">
+          <div className="bg-white rounded-2xl shadow-md p-6 border border-gray-200">
+            <h4 className="text-lg font-semibold text-gray-800 mb-4 text-center">
+              Relationship Graph for <span className="text-blue-600">{data.entity.id}</span>
+            </h4>
+            <div className="flex justify-center">
+              <EntityGraph
+                entity={data.entity}
+                relatedEntities={data.related_entities}
+                links={data.links}
+                onEntityClick={handleEntityClick}
+              />
+            </div>
+          </div>
+        </div>
       </div>
       
       <div className="mb-8">

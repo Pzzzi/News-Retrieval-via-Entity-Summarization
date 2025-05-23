@@ -49,7 +49,7 @@ const SearchBar = ({ onSearchSelect }) => {
                   focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500
                   text-gray-700 placeholder-gray-400 transition-all"
         type="text"
-        placeholder="Search for entities..."
+        placeholder="What are you interested in?"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         onFocus={() => setShowSuggestions(true)}

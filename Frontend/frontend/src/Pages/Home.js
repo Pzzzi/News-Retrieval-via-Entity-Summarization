@@ -1,11 +1,9 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import SearchBar from '../Components/SearchBar';
 import ArticleCard from '../Components/ArticleCard';
 
 function Home() {
-  const [query, setQuery] = useState('');
   const [homeData, setHomeData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -43,13 +41,8 @@ function Home() {
       {/* Hero Section */}
       <section className="text-center mb-10">
         <h1 className="text-4xl mb-5 text-blue-800 flex justify-center items-center gap-2">
-          <span>🔍</span> Entity-Based News Search
+          Entity-Based News Retrieval
         </h1>
-        <SearchBar 
-          query={query}
-          setQuery={setQuery}
-          onSearchSelect={handleSearch}
-        />
       </section>
 
       {/* Trending Entities */}
@@ -88,7 +81,6 @@ function Home() {
                 key={article._id}
                 article={{
                   ...article,
-                  // Make sure ArticleCard gets the correct props
                   id: article._id,
                   entities: article.entities.map(e => ({
                     name: e.normalized_label,
