@@ -63,22 +63,16 @@ def process_collection():
                 break
 
             texts = [doc["content"] for doc in batch]
-            docs = nlp.pipe(texts, batch_size=8)  # Smaller batch due to transformer memory use
+            docs = nlp.pipe(texts, batch_size=8)
 
-            updates = []
             for doc, article in zip(docs, batch):
                 entities = extract_filtered_entities(doc.text)
                 if entities:
-                    updates.append(
-                        UpdateMany(
-                            {"_id": article["_id"]},
-                            {"$set": {"entities": entities}}
-                        )
+                    collection.update_one(
+                        {"_id": article["_id"]},
+                        {"$set": {"entities": entities}}
                     )
                 pbar.update(1)
-
-            if updates:
-                collection.bulk_write(updates, ordered=False)
 
 if __name__ == "__main__":
     process_collection()
