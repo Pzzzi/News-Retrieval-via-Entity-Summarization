@@ -64,3 +64,14 @@ jobs:
         run: |
           set -e
           python Backend/Database/Mongo/skynews_scraper.py
+
+      - name: Download spaCy model
+        run: |
+          python -m spacy download en_core_web_trf
+
+      - name: Run NER Entity Linking
+        env:
+          MONGO_URI: ${{ secrets.MONGO_URI }}
+        run: |
+          set -e
+          python Backend/Services/NER/ner_extraction.py

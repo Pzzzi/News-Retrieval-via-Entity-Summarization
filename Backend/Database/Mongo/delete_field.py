@@ -7,7 +7,7 @@ load_dotenv()
 # Connect to MongoDB
 client = MongoClient(os.getenv("MONGO_URI"))
 db = client["news_db"]
-collection = db["test_articles"]
+collection = db["articles"]
 
 # Remove the "entities" field from all documents
 result = collection.update_many(
@@ -15,4 +15,4 @@ result = collection.update_many(
     {"$unset": {"entities": ""}}  # $unset removes the field
 )
 
-print(f"Removed 'entities' field from {result.modified_count} documents in 'test_articles' collection")
+print(f"Removed 'entities' field from {result.modified_count} documents in 'articles' collection")

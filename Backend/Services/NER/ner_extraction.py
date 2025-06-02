@@ -14,7 +14,7 @@ nlp.add_pipe("entityLinker", last=True)
 # MongoDB setup
 client = MongoClient(os.getenv("MONGO_URI"))
 db = client["news_db"]
-collection = db["test_articles"]
+collection = db["articles"]
 
 # Entity types to exclude
 EXCLUDED_TYPES = {"CARDINAL", "DATE", "PRODUCT"}

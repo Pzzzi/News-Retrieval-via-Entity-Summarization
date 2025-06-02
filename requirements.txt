@@ -4,3 +4,7 @@ pymongo==4.11.1
 python-dotenv==1.1.0
 python-dateutil==2.9.0
 dnspython==2.7.0  
+spacy==3.8.6
+spacy-entity-linker==1.0.3
+torch>=2.7.0
+transformers==4.49.0

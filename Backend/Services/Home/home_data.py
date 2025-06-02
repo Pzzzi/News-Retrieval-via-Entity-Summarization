@@ -1,5 +1,6 @@
 import os
 from pymongo import MongoClient
+from neo4j import GraphDatabase
 from dotenv import load_dotenv
 import re
 
@@ -10,6 +11,11 @@ MONGO_URI = os.getenv("MONGO_URI")
 client = MongoClient(MONGO_URI)
 db = client["news_db"]
 collection = db["test_articles"]
+
+NEO4J_URI = os.getenv("NEO4J_URI")
+NEO4J_USER = os.getenv("NEO4J_USER")
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD")
+driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
 
 def normalize_entity_name(entity_name):
     """Helper function to normalize entity names for comparison"""
@@ -81,51 +87,36 @@ def get_recent_articles(limit=10):
     return processed_articles
 
 def get_popular_entities(limit=10):
-    """Fetch most frequently mentioned entities with normalized labels"""
-    pipeline = [
-        {"$unwind": "$entities"},
-        # Only count entities that have both text and label
-        {"$match": {
-            "entities.text": {"$exists": True},
-            "entities.label": {"$exists": True}
-        }},
-        # Group by normalized label (not by raw text)
-        {"$group": {
-            "_id": {
-                "normalized_label": "$entities.label",
-                "type": "$entities.type"
-            },
-            "count": {"$sum": 1},
-            # Keep sample data for display
-            "sample_text": {"$first": "$entities.text"},
-            "wikidata_id": {"$first": "$entities.wikidata_id"},
-            "description": {"$first": "$entities.description"}
-        }},
-        {"$sort": {"count": -1}},
-        {"$limit": limit},
-        {"$project": {
-            "normalized_label": "$_id.normalized_label",
-            "type": "$_id.type",
-            "count": 1,
-            "sample_text": 1,
-            "wikidata_id": 1,
-            "description": 1,
-            "_id": 0
-        }}
-    ]
+    """
+    Fetch most frequently occurring entities from Neo4j with type, label, and metadata.
+    """
+    query = """
+    MATCH (e:Entity)
+    OPTIONAL MATCH (e)-[r]->()
+    WITH e, count(r) AS relation_count
+    RETURN 
+        e.name AS normalized_label,
+        e.type AS type,
+        e.wikidataId AS wikidata_id,
+        e.description AS description,
+        relation_count AS count
+    ORDER BY count DESC
+    LIMIT $limit
+    """
     
-    entities = list(collection.aggregate(pipeline))
-    
-    # Add ranking information
-    ranked_entities = []
-    for i, entity in enumerate(entities, 1):
-        ranked_entity = {
-            "rank": i,
-            **entity
-        }
-        ranked_entities.append(ranked_entity)
-    
-    return ranked_entities
+    with driver.session() as session:
+        result = session.run(query, limit=limit)
+        entities = []
+        for i, record in enumerate(result, 1):
+            entities.append({
+                "rank": i,
+                "normalized_label": record["normalized_label"],
+                "type": record["type"],
+                "count": record["count"],
+                "wikidata_id": record.get("wikidata_id", ""),
+                "description": record.get("description", "")
+            })
+    return entities
 
 def get_important_relations(limit=5):
     """Fetch important relationships between entities"""
