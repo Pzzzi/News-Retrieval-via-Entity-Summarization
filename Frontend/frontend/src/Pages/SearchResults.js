@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import EntityGraph from '../Components/EntityGraph';
 import ArticleCard from '../Components/ArticleCard';
+import { debounce } from 'lodash';
 
 function SearchResults() {
   const { entity } = useParams();
@@ -12,8 +13,11 @@ function SearchResults() {
   const [loading, setLoading] = useState(true);
   const [summaryLoading, setSummaryLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
 
-  // Fetch entity search results
+  // Initial data load
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
@@ -24,11 +28,12 @@ function SearchResults() {
           { timeout: 10000 }
         );
 
-        if (!response.data?.entity || !response.data?.articles) {
+        if (!response.data?.entity) {
           throw new Error('Invalid API response structure');
         }
 
         setData(response.data);
+        setHasMore(response.data.pagination?.has_more || false);
       } catch (error) {
         console.error("Error fetching data:", error);
         setError(error.message);
@@ -40,6 +45,49 @@ function SearchResults() {
     fetchData();
   }, [entity]);
 
+  // Load more articles
+  const loadMoreArticles = useCallback(async () => {
+    if (!hasMore || isLoadingMore) return;
+
+    setIsLoadingMore(true);
+    try {
+      const nextPage = page + 1;
+      const response = await axios.get(
+        `http://127.0.0.1:5000/search?entity=${entity}&page=${nextPage}`,
+        { timeout: 10000 }
+      );
+
+      if (response.data?.articles?.length) {
+        setData(prev => ({
+          ...prev,
+          articles: [...prev.articles, ...response.data.articles],
+          pagination: response.data.pagination
+        }));
+        setPage(nextPage);
+        setHasMore(response.data.pagination?.has_more || false);
+      } else {
+        setHasMore(false);
+      }
+    } catch (error) {
+      console.error("Error loading more articles:", error);
+    } finally {
+      setIsLoadingMore(false);
+    }
+  }, [entity, page, hasMore, isLoadingMore]);
+
+  // Scroll handler
+  useEffect(() => {
+    const handleScroll = debounce(() => {
+      const { scrollTop, scrollHeight, clientHeight } = document.documentElement;
+      if (scrollTop + clientHeight > scrollHeight * 0.8) {
+        loadMoreArticles();
+      }
+    }, 100);
+
+    window.addEventListener('scroll', handleScroll);
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, [loadMoreArticles]);
+
   // Fetch entity summary from titles
   useEffect(() => {
     const fetchSummary = async () => {
@@ -49,7 +97,7 @@ function SearchResults() {
           `http://127.0.0.1:5000/entity_summary_titles/${entity}`,
           { timeout: 30000 }
         );
-  
+
         if (response.data?.summary) {
           setSummary(response.data.summary);
         }
@@ -60,12 +108,13 @@ function SearchResults() {
         setSummaryLoading(false);
       }
     };
-  
-    fetchSummary();
-  }, [entity]);  
 
-  const handleEntityClick = (newEntity) => {
-    navigate(`/search/${newEntity}`);
+    fetchSummary();
+  }, [entity]);
+
+  const handleEntityClick = (entity) => {
+    const label = entity.name || entity.normalized_label || entity.text;
+    navigate(`/search/${encodeURIComponent(label)}`);
   };
 
   const handleArticleClick = (articleId) => {
@@ -91,7 +140,7 @@ function SearchResults() {
         </div>
         <p className="text-lg font-medium text-gray-800 mb-2">Error loading results</p>
         <p className="text-gray-600 mb-4">{error}</p>
-        <button 
+        <button
           onClick={() => window.location.reload()}
           className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
         >
@@ -116,7 +165,7 @@ function SearchResults() {
   return (
     <div className="container mx-auto px-4 py-8">
       <div className="mb-8">
-        {/* Entity Summary Section */}
+        {/* Entity Summary Section - unchanged */}
         {summaryLoading ? (
           <div className="bg-blue-50 rounded-lg p-4 mb-6 animate-pulse">
             <p className="text-gray-700">
@@ -132,6 +181,7 @@ function SearchResults() {
           </div>
         ) : null}
 
+        {/* Entity Graph - unchanged */}
         <div className="mb-8">
           <div className="bg-white rounded-2xl shadow-md p-6 border border-gray-200">
             <h4 className="text-lg font-semibold text-gray-800 mb-4 text-center">
@@ -148,14 +198,14 @@ function SearchResults() {
           </div>
         </div>
       </div>
-      
+
       <div className="mb-8">
         <h4 className="text-xl font-semibold text-gray-800 mb-4">
-          Related Articles ({data.articles.length})
+          Related Articles ({data.pagination?.total || data.articles.length})
         </h4>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {data.articles.map((article) => (
-            <ArticleCard 
+            <ArticleCard
               key={article._id}
               article={article}
               onClick={handleArticleClick}
@@ -163,6 +213,20 @@ function SearchResults() {
             />
           ))}
         </div>
+
+        {/* Loading indicator */}
+        {isLoadingMore && (
+          <div className="flex justify-center my-8">
+            <div className="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-blue-500"></div>
+          </div>
+        )}
+
+        {/* No more articles message */}
+        {!hasMore && data.articles.length > 0 && (
+          <div className="text-center py-6 text-gray-500">
+            No more articles to load
+          </div>
+        )}
       </div>
     </div>
   );

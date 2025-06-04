@@ -10,7 +10,7 @@ const EntityGraph = ({ entity, relatedEntities, links, onEntityClick }) => {
     PERSON: "#3B82F6",      // blue-600
     NORP: "#8B5CF6",        // purple-600
     FAC: "#F59E0B",         // amber-600
-    ORG: "#6366F1",         // indigo-600
+    ORG: "#F43F5E",         // indigo-600
     GPE: "#10B981",         // green-600
     LOC: "#059669",         // emerald-600
     PRODUCT: "#06B6D4",     // cyan-600
@@ -23,7 +23,7 @@ const EntityGraph = ({ entity, relatedEntities, links, onEntityClick }) => {
     PERCENT: "#84CC16",     // lime-600
     MONEY: "#14B8A6",       // teal-600
     QUANTITY: "#EC4899",    // pink-600
-    ORDINAL: "#F43F5E",     // rose-600
+    ORDINAL: "#6366F1",     // rose-600
     CARDINAL: "#F59E0B",    // amber-600 (same as FAC)
     UNKNOWN: "#9CA3AF"      // gray-400
   };

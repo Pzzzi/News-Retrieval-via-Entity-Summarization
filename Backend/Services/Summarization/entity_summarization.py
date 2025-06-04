@@ -1,4 +1,5 @@
 import os
+import threading
 from transformers import pipeline
 from pymongo import MongoClient
 from bson import ObjectId
@@ -6,6 +7,7 @@ from dotenv import load_dotenv
 import torch
 import logging
 from functools import wraps
+import gc
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -20,12 +22,11 @@ MAX_INPUT_LENGTH = 1024
 SUMMARY_MAX_LENGTH = 130
 SUMMARY_MIN_LENGTH = 30
 FALLBACK_MODEL = "facebook/bart-large-cnn"
+ENTITY_SUMMARY_LENGTH = 100
 
-# Global model instance with lazy loading
+# Global model instance with better management
 summarizer_instance = None
-model_loaded = False
-load_attempts = 0
-MAX_LOAD_ATTEMPTS = 2
+model_lock = threading.Lock()
 
 def handle_errors(func):
     """Decorator for comprehensive error handling"""
@@ -57,55 +58,84 @@ def get_device():
     """Determine the best available device with fallback"""
     try:
         if torch.cuda.is_available():
-            return 0  # Use first GPU
-        return -1  # Use CPU
+            return torch.device("cuda:0")
+        return torch.device("cpu")
     except Exception as e:
         logger.warning(f"Device detection failed, defaulting to CPU: {e}")
-        return -1
+        return torch.device("cpu")
+
+def cleanup_model():
+    """Clean up model resources"""
+    global summarizer_instance
+    if summarizer_instance is not None:
+        try:
+            if hasattr(summarizer_instance, 'model'):
+                del summarizer_instance.model
+            if hasattr(summarizer_instance, 'tokenizer'):
+                del summarizer_instance.tokenizer
+            del summarizer_instance
+            summarizer_instance = None
+        except Exception as e:
+            logger.warning(f"Model cleanup failed: {e}")
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
 def load_summarizer():
-    """Lazy loading of summarization model with fallbacks"""
-    global summarizer_instance, model_loaded, load_attempts
+    """Thread-safe lazy loading of summarization model with better resource management"""
+    global summarizer_instance
     
-    if model_loaded:
-        return summarizer_instance
-    
-    if load_attempts >= MAX_LOAD_ATTEMPTS:
-        logger.error("Max model load attempts reached")
-        raise RuntimeError("Model loading failed after multiple attempts")
-    
-    device = get_device()
-    model_to_load = MODEL_NAME if load_attempts == 0 else FALLBACK_MODEL
-    
-    try:
-        logger.info(f"Attempting to load model {model_to_load} on device {device} (attempt {load_attempts + 1})")
+    with model_lock:
+        if summarizer_instance is not None:
+            return summarizer_instance
         
-        # Clear GPU cache if available
-        if device >= 0:
-            torch.cuda.empty_cache()
+        device = get_device()
+        model_to_load = MODEL_NAME
         
-        summarizer_instance = pipeline(
-            "summarization",
-            model=model_to_load,
-            device=device,
-            truncation=True,
-            torch_dtype=torch.float16 if device >= 0 else torch.float32
-        )
+        try:
+            logger.info(f"Loading model {model_to_load} on {device}")
+            
+            # Clear resources before loading
+            cleanup_model()
+            
+            summarizer_instance = pipeline(
+                "summarization",
+                model=model_to_load,
+                device=device,
+                truncation=True,
+                torch_dtype=torch.float16 if device.type == "cuda" else torch.float32
+            )
+            
+            # Warm up the model
+            try:
+                summarizer_instance("This is a warmup sentence.", max_length=10, min_length=5)
+            except Exception as warmup_error:
+                logger.warning(f"Model warmup failed: {warmup_error}")
+            
+            logger.info(f"Successfully loaded {model_to_load}")
+            return summarizer_instance
         
-        model_loaded = True
-        logger.info(f"Successfully loaded {model_to_load}")
-        return summarizer_instance
-    
-    except Exception as e:
-        load_attempts += 1
-        logger.error(f"Model load failed (attempt {load_attempts}): {e}")
-        
-        # Try again with CPU if GPU failed
-        if device >= 0:
-            logger.info("Retrying with CPU...")
-            return load_summarizer()
-        
-        raise
+        except Exception as e:
+            logger.error(f"Model load failed: {e}")
+            cleanup_model()
+            
+            # Try fallback model
+            if model_to_load != FALLBACK_MODEL:
+                logger.info(f"Attempting fallback model {FALLBACK_MODEL}")
+                try:
+                    summarizer_instance = pipeline(
+                        "summarization",
+                        model=FALLBACK_MODEL,
+                        device=torch.device("cpu"),  # Force CPU for fallback
+                        truncation=True
+                    )
+                    logger.info(f"Successfully loaded fallback model {FALLBACK_MODEL}")
+                    return summarizer_instance
+                except Exception as fallback_error:
+                    logger.error(f"Fallback model load failed: {fallback_error}")
+                    cleanup_model()
+            
+            raise RuntimeError("Failed to load any summarization model")
 
 def preprocess_content(content):
     """Clean and prepare content for summarization with validation"""
@@ -119,6 +149,26 @@ def preprocess_content(content):
     except Exception as e:
         logger.error(f"Content preprocessing failed: {e}")
         return ""
+
+def chunked_summarize(content, summarizer, chunk_size=512, max_length=SUMMARY_MAX_LENGTH, min_length=SUMMARY_MIN_LENGTH):
+    """Process content in chunks to avoid memory issues"""
+    chunks = [content[i:i+chunk_size] for i in range(0, len(content), chunk_size)]
+    summaries = []
+    
+    for chunk in chunks:
+        try:
+            result = summarizer(
+                chunk,
+                max_length=min(max_length, len(chunk)//2),
+                min_length=min(min_length, len(chunk)//4),
+                do_sample=False
+            )
+            summaries.append(result[0]["summary_text"])
+        except Exception as e:
+            logger.warning(f"Chunk summarization failed, using fallback: {e}")
+            summaries.append(chunk[:50] + "...")  # Simple fallback
+    
+    return " ".join(summaries)
 
 @handle_errors
 def get_article_summary(article_id):
@@ -147,42 +197,34 @@ def get_article_summary(article_id):
     # Attempt to get summary
     try:
         summarizer = load_summarizer()
-        summary_result = summarizer(
-            content,
-            max_length=SUMMARY_MAX_LENGTH,
-            min_length=SUMMARY_MIN_LENGTH,
-            do_sample=False
-        )
-        summary = summary_result[0]["summary_text"]
+        if len(content) > 512:  # Use chunked processing for longer content
+            summary = chunked_summarize(content, summarizer)
+        else:
+            summary_result = summarizer(
+                content,
+                max_length=SUMMARY_MAX_LENGTH,
+                min_length=SUMMARY_MIN_LENGTH,
+                do_sample=False
+            )
+            summary = summary_result[0]["summary_text"]
     except RuntimeError as e:
-        if "CUDA out of memory" in str(e):
-            logger.warning("CUDA OOM error, retrying with batch processing")
+        if "out of memory" in str(e).lower():
+            logger.warning("Memory error, retrying with cleanup")
+            cleanup_model()
             try:
-                # Try processing in smaller chunks
-                chunk_size = len(content) // 2
-                summary_parts = []
-                for i in range(0, len(content), chunk_size):
-                    chunk = content[i:i + chunk_size]
-                    part = summarizer(
-                        chunk,
-                        max_length=SUMMARY_MAX_LENGTH // 2,
-                        min_length=SUMMARY_MIN_LENGTH // 2,
-                        do_sample=False
-                    )[0]["summary_text"]
-                    summary_parts.append(part)
-                summary = " ".join(summary_parts)
-            except Exception as inner_e:
-                logger.error(f"Chunked processing failed: {inner_e}")
-                summary = content[:100] + "..."  # Fallback to truncation
+                summarizer = load_summarizer()
+                summary = chunked_summarize(content, summarizer, chunk_size=256)
+            except Exception as retry_error:
+                logger.error(f"Retry failed: {retry_error}")
+                summary = content[:100] + "..."
         else:
             logger.error(f"Summarization failed: {e}")
-            summary = content[:100] + "..."  # Basic fallback
-
+            summary = content[:100] + "..."
     except Exception as e:
         logger.error(f"Unexpected summarization error: {e}")
-        summary = content[:100] + "..."  # Basic fallback
+        summary = content[:100] + "..."
 
-    # Prepare response with fallback values for all fields
+    # Prepare response
     response = {
         "article_id": str(article.get("_id", "")),
         "article_title": article.get("title", "Untitled Article"),
@@ -244,19 +286,47 @@ def get_entity_summary(entity_name):
     combined_text = " ".join(titles)
     combined_text = preprocess_content(combined_text)
 
-    # Attempt summarization
+    # Attempt summarization with improved error handling
     try:
         summarizer = load_summarizer()
-        summary_result = summarizer(
-            combined_text,
-            max_length=100,
-            min_length=30,
-            do_sample=False
-        )
-        summary = summary_result[0]["summary_text"]
+        
+        if len(combined_text) > 512:
+            summary = chunked_summarize(
+                combined_text, 
+                summarizer,
+                max_length=ENTITY_SUMMARY_LENGTH,
+                min_length=ENTITY_SUMMARY_LENGTH//3
+            )
+        else:
+            summary_result = summarizer(
+                combined_text,
+                max_length=ENTITY_SUMMARY_LENGTH,
+                min_length=ENTITY_SUMMARY_LENGTH//3,
+                do_sample=False
+            )
+            summary = summary_result[0]["summary_text"]
+            
+    except RuntimeError as e:
+        if "out of memory" in str(e).lower():
+            logger.warning("Memory error during entity summarization, retrying with cleanup")
+            cleanup_model()
+            try:
+                summarizer = load_summarizer()
+                summary = chunked_summarize(
+                    combined_text, 
+                    summarizer,
+                    chunk_size=256,
+                    max_length=ENTITY_SUMMARY_LENGTH,
+                    min_length=ENTITY_SUMMARY_LENGTH//3
+                )
+            except Exception as retry_error:
+                logger.error(f"Entity summarization retry failed: {retry_error}")
+                summary = ". ".join(titles[:3]) + "..." if len(titles) > 3 else ". ".join(titles)
+        else:
+            logger.error(f"Entity summarization failed: {e}")
+            summary = ". ".join(titles[:3]) + "..." if len(titles) > 3 else ". ".join(titles)
     except Exception as e:
-        logger.error(f"Entity summarization failed: {e}")
-        # Fallback to simple concatenation
+        logger.error(f"Unexpected entity summarization error: {e}")
         summary = ". ".join(titles[:3]) + "..." if len(titles) > 3 else ". ".join(titles)
 
     return {

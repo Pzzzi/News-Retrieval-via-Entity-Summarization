@@ -21,24 +21,53 @@ def normalize_entity_name(entity_name):
     """Helper function to normalize entity names for comparison"""
     return entity_name.lower().strip()
 
-def select_best_image(images):
-    """Select the highest resolution image available"""
+def get_best_image(images):
     if not images:
         return None
+
+    def parse_resolution(url):
+        match = re.search(r'/(\d+)x(\d+)/', url)
+        if match:
+            return int(match.group(1)), int(match.group(2))
+        return None
+
+    # Filter out low-quality or square images
+    filtered_images = []
+    for img in images:
+        res = parse_resolution(img)
+        if res:
+            width, height = res
+            if width >= 200 and height >= 200 and abs(width - height) > 20:
+                area = width * height
+                filtered_images.append((area, img))
+
+    if filtered_images:
+        # Return image with largest area
+        return max(filtered_images, key=lambda x: x[0])[1]
+
+    # Fallback: use original resolution order logic
     resolution_order = ['1536', '1586', '1526', '1024', '840', '800', '640', '480', '320', '240']
     for res in resolution_order:
         for img in images:
             if f"/{res}/" in img:
                 return img
+
     return images[0]
 
+# Add a new endpoint for paginated articles
+def get_paginated_articles(page=1, per_page=9):
+    """Get articles with pagination support"""
+    return get_recent_articles(limit=per_page, page=page)
+
 # ===== Homepage Data Functions =====
-def get_recent_articles(limit=10):
+def get_recent_articles(limit=9, page=1):
     """Fetch most recent articles with normalized entity labels"""
+    skip = (page - 1) * limit
     pipeline = [
         # Only include documents that have non-empty entities array
         {"$match": {"entities": {"$exists": True, "$ne": []}}},
         {"$sort": {"date": -1}},
+        {"$skip": skip},
         {"$limit": limit},
         {"$project": {
             "title": 1,
@@ -80,7 +109,7 @@ def get_recent_articles(limit=10):
             "title": article["title"],
             "url": article["url"],
             "date": article.get("date"),
-            "image": select_best_image(article.get("images", [])),
+            "image": get_best_image(article.get("images", [])),
             "entities": processed_entities[:3]  # Limit to 3 entities for display
         })
     

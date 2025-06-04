@@ -159,8 +159,8 @@ function ArticleDetail() {
                     iconColor = 'text-amber-600';
                     break;
                   case 'ORG':
-                    bgColor = 'bg-indigo-50';
-                    iconColor = 'text-indigo-600';
+                    bgColor = 'bg-rose-50';
+                    iconColor = 'text-rose-600';
                     break;
                   case 'GPE':
                     bgColor = 'bg-green-50';
@@ -211,8 +211,8 @@ function ArticleDetail() {
                     iconColor = 'text-pink-600';
                     break;
                   case 'ORDINAL':
-                    bgColor = 'bg-rose-50';
-                    iconColor = 'text-rose-600';
+                    bgColor = 'bg-indigo-50';
+                    iconColor = 'text-indigo-600';
                     break;
                   case 'CARDINAL':
                     bgColor = 'bg-amber-50';

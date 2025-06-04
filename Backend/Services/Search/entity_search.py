@@ -127,14 +127,15 @@ def get_related_entities(entity_name):
         }
 
 # === MongoDB: Search Articles with Ranking ===
-def search_articles_by_entity(entity_name, related_entities):
+def search_articles_by_entity(entity_name, related_entities, page=1, per_page=10):
     """Fetch articles mentioning the entity & related entities, ranked by relevance."""
-    # Create search terms including both raw and normalized versions
     search_terms = list({
         entity_name,
         *[e["id"] for e in related_entities],
         *[normalize_entity_name(e["id"]) for e in related_entities]
     })
+    
+    skip = (page - 1) * per_page
     
     pipeline = [
         {"$match": {
@@ -194,7 +195,6 @@ def search_articles_by_entity(entity_name, related_entities):
                     ]}
                 ]
             },
-            # Add normalized entity information
             "matched_entities": {
                 "$filter": {
                     "input": "$entities",
@@ -209,7 +209,8 @@ def search_articles_by_entity(entity_name, related_entities):
             }
         }},
         {"$sort": {"entity_match_score": -1, "date": -1}},
-        {"$limit": 10},
+        {"$skip": skip},
+        {"$limit": per_page},
         {"$project": {
             "title": 1,
             "url": 1,
@@ -221,17 +222,53 @@ def search_articles_by_entity(entity_name, related_entities):
         }}
     ]
     
+    # Also get total count for pagination
+    count_pipeline = [
+        {"$match": {
+            "$or": [
+                {"entities.label": {"$in": search_terms}},
+                {"entities.text": {"$in": search_terms}}
+            ]
+        }},
+        {"$count": "total"}
+    ]
+    
     articles = list(collection.aggregate(pipeline))
-
+    total_count = list(collection.aggregate(count_pipeline))
+    total = total_count[0]["total"] if total_count else 0
+    
     def get_best_image(images):
         if not images:
             return None
+
+        def parse_resolution(url):
+            match = re.search(r'/(\d+)x(\d+)/', url)
+            if match:
+                return int(match.group(1)), int(match.group(2))
+            return None
+
+        # Filter out low-quality or square images
+        filtered_images = []
+        for img in images:
+            res = parse_resolution(img)
+            if res:
+                width, height = res
+                if width >= 200 and height >= 200 and abs(width - height) > 20:
+                    area = width * height
+                    filtered_images.append((area, img))
+
+        if filtered_images:
+            # Return image with largest area
+            return max(filtered_images, key=lambda x: x[0])[1]
+
+        # Fallback: use original resolution order logic
         resolution_order = ['1536', '1586', '1526', '1024', '840', '800', '640', '480', '320', '240']
         for res in resolution_order:
             for img in images:
                 if f"/{res}/" in img:
                     return img
-        return images[0] if images else None
+
+        return images[0]
 
     processed_articles = []
     for article in articles:
@@ -263,7 +300,13 @@ def search_articles_by_entity(entity_name, related_entities):
             "match_score": article.get("entity_match_score", 0)
         })
     
-    return processed_articles
+    return {
+        "articles": processed_articles,
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "has_more": skip + per_page < total
+    }
 
 # === Query Suggestion When No Results Are Found ===
 def suggest_alternative_entities(entity_name):
@@ -287,21 +330,27 @@ def suggest_alternative_entities(entity_name):
         } for record in result]
 
 # === Unified Search Function ===
-def entity_search(entity_name):
+def entity_search(entity_name, page=1, per_page=10):
     """Fetch related entities, ranked articles, and handle no-result cases."""
     normalized_name = normalize_entity_name(entity_name)
     related_data = get_related_entities(normalized_name)
-    articles = search_articles_by_entity(normalized_name, related_data["nodes"])
+    article_data = search_articles_by_entity(normalized_name, related_data["nodes"], page, per_page)
 
     response = {
         "entity": related_data["main_entity"],
         "related_entities": related_data["nodes"],
         "links": related_data["links"],
         "relation_details": related_data["relation_details"],
-        "articles": articles
+        "articles": article_data["articles"],
+        "pagination": {
+            "total": article_data["total"],
+            "page": article_data["page"],
+            "per_page": article_data["per_page"],
+            "has_more": article_data["has_more"]
+        }
     }
 
-    if not articles:
+    if not article_data["articles"]:
         response["suggestions"] = suggest_alternative_entities(normalized_name)
     
     return response

@@ -48,15 +48,15 @@ RELATION_LABELS = [
 ]
 
 # 1. USE A FINE-TUNED MODEL SPECIFICALLY FOR RELATION CLASSIFICATION
-model_path = "D:/FYP RELATION CLASSIFIER MODEL ROBERTA" 
+model_path = "Pzzzzi/relation-classifier" 
 tokenizer = AutoTokenizer.from_pretrained(model_path)
 model = AutoModelForSequenceClassification.from_pretrained(model_path)
 
 # 3. ADJUSTED CONFIDENCE THRESHOLD
-CONFIDENCE_THRESHOLD = 0.0030
+CONFIDENCE_THRESHOLD = 0.0010
 
 # ADDED: Special handling for "Other" class - require higher confidence
-OTHER_CONFIDENCE_THRESHOLD = 0.98
+OTHER_CONFIDENCE_THRESHOLD = 0.99
 
 # ===== NEO4J BATCH INGESTION CLASS =====
 class Neo4jIngestor:
