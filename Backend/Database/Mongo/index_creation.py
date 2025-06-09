@@ -6,6 +6,5 @@ load_dotenv()
 client = MongoClient(os.getenv("MONGO_URI"))
 collection = client["news_db"]["articles"]
 
-collection.create_index([("entities", ASCENDING)])
-collection.create_index([("content", ASCENDING)])
+collection.create_index([("date", ASCENDING)])
 print("Indexes created.")

@@ -1,10 +1,9 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from Services.Search.entity_search import entity_search
-from Services.Summarization.entity_summarization import get_article_summary
-from Services.Summarization.entity_summarization import get_entity_summary
+from Services.Summarization.entity_summarization import get_article_summary, get_entity_summary
 from Services.Home.home_data import get_homepage_data, get_paginated_articles
-from Services.Search.search_bar import suggest_entities
+from Services.Search.search_bar import suggest_entities, search_articles
 
 app = Flask(__name__)
 CORS(app)
@@ -42,8 +41,14 @@ def home_data():
 @app.route('/suggest')
 def suggest():
     query = request.args.get('q', '')
-    suggestions = suggest_entities(query)
-    return jsonify(suggestions)  # This will properly format the response
+    
+    entity_suggestions = suggest_entities(query)
+    article_results = search_articles(query)
+    
+    return jsonify({
+        "results": entity_suggestions.get("results", []),
+        "articles": article_results.get("articles", [])
+    })
 
 @app.route('/entity_summary_titles/<entity_name>', methods=['GET'])
 def fetch_entity_summary_titles(entity_name):
