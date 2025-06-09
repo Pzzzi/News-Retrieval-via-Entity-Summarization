@@ -114,8 +114,8 @@ const EntityGraph = ({ entity, relatedEntities, links, onEntityClick }) => {
     // Adjust node radius based on degree
     nodes.forEach(node => {
       if (nodeDegree[node.id]) {
-        node.radius = node.id === entity.id 
-          ? 20 
+        node.radius = node.id === entity.id
+          ? 20
           : Math.min(10 + nodeDegree[node.id] * 1.5, 16);
       }
     });
@@ -125,15 +125,51 @@ const EntityGraph = ({ entity, relatedEntities, links, onEntityClick }) => {
       .force("link", d3.forceLink(linkData)
         .id(d => d.id)
         .distance(d => {
-          // Increase distance for main entity connections
-          return (d.source === entity.id || d.target === entity.id) ? 180 : 120;
+          // Main entity connections get more distance
+          if (d.source.id === entity.id || d.target.id === entity.id) {
+            return 180;
+          }
+          // Connections between highly connected nodes get more distance
+          const sourceDegree = nodeDegree[d.source.id] || 1;
+          const targetDegree = nodeDegree[d.target.id] || 1;
+          return 80 + Math.min(sourceDegree, targetDegree) * 10;
         })
       )
-      .force("charge", d3.forceManyBody().strength(-300))
-      .force("center", d3.forceCenter(width / 2, height / 2))
-      .force("x", d3.forceX(width / 2).strength(d => d.group === "main" ? 0.5 : 0.02))
-      .force("y", d3.forceY(height / 2).strength(d => d.group === "main" ? 0.5 : 0.02))
-      .force("collision", d3.forceCollide().radius(d => d.radius + 8));
+      .force("charge", d3.forceManyBody()
+        .strength(d => {
+          // Scale repulsion by node degree
+          const degree = nodeDegree[d.id] || 1;
+          return -200 / Math.sqrt(degree + 1);
+        })
+      )
+      .force("x", d3.forceX(width / 2)
+        .strength(d => d.id === entity.id ? 0.1 : 0.01)
+      )
+      .force("y", d3.forceY(height / 2)
+        .strength(d => d.id === entity.id ? 0.1 : 0.01)
+      )
+      .force("collision", d3.forceCollide()
+        .radius(d => d.radius + 5)
+        .strength(0.8)
+      );
+
+    // Initialize positions to prevent circular clustering
+    nodes.forEach((node, i) => {
+      if (node.id === entity.id) {
+        node.x = width / 2;
+        node.y = height / 2;
+        node.fx = width / 2; // Fixed position for main entity
+        node.fy = height / 2;
+      } else {
+        const angle = Math.random() * Math.PI * 2;
+        const radius = 100 + Math.random() * 50;
+        node.x = width / 2 + radius * Math.cos(angle);
+        node.y = height / 2 + radius * Math.sin(angle);
+      }
+    });
+
+    // Start with higher alpha to get things moving
+    simulation.alpha(1).restart();
 
     // Draw links with better styling
     const link = svgGroup.selectAll(".link")
@@ -181,7 +217,11 @@ const EntityGraph = ({ entity, relatedEntities, links, onEntityClick }) => {
       .style("opacity", 0.9)
       .on("click", (event, d) => {
         if (d.id !== entity.id) {
-          onEntityClick(d.id);
+          // Find the full entity data from relatedEntities
+          const clickedEntity = relatedEntities.find(e => e.id === d.id);
+          if (clickedEntity) {
+            onEntityClick(clickedEntity);  // Pass the full entity object
+          }
         }
       });
 
@@ -205,7 +245,7 @@ const EntityGraph = ({ entity, relatedEntities, links, onEntityClick }) => {
       .on("mouseover", (event, d) => {
         const type = Array.isArray(d.type) ? d.type[0] : d.type;
         const color = colorMap[type] || colorMap.UNKNOWN;
-        
+
         tooltip
           .html(`
             <div style="margin-bottom: 4px; font-weight: bold; color: ${color}">
@@ -219,16 +259,16 @@ const EntityGraph = ({ entity, relatedEntities, links, onEntityClick }) => {
           .style("left", `${event.pageX + 15}px`)
           .style("top", `${event.pageY - 15}px`)
           .style("opacity", 1);
-        
+
         // Highlight connected nodes and links
         svgGroup.selectAll(".link")
-          .style("stroke-opacity", l => 
+          .style("stroke-opacity", l =>
             (l.source.id === d.id || l.target.id === d.id) ? 0.8 : 0.2);
-        
+
         svgGroup.selectAll(".node")
-          .style("opacity", n => 
-            n.id === d.id || linkData.some(l => 
-              (l.source.id === d.id && l.target.id === n.id) || 
+          .style("opacity", n =>
+            n.id === d.id || linkData.some(l =>
+              (l.source.id === d.id && l.target.id === n.id) ||
               (l.target.id === d.id && l.source.id === n.id)
             ) ? 1 : 0.3)
           .attr("fill", n => {

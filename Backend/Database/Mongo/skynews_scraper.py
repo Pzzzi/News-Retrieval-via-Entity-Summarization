@@ -171,11 +171,23 @@ def get_full_article(article):
         }
 
         clean_url = normalize_url(url)
-        res = collection.update_one(
-            {"url": {"$regex": f"^{re.escape(clean_url)}(#|\?|$)"}},
-            {"$setOnInsert": doc},
-            upsert=True
-        )
+        # Check if article with same URL already exists
+        existing_by_url = collection.find_one({"url": {"$regex": f"^{re.escape(clean_url)}(#|\?|$)"}})
+        if existing_by_url:
+            print(f"⏩ Skipping (URL duplicate): {url}")
+            return False
+
+        # Check if article with similar title already exists (case-insensitive)
+        existing_by_title = collection.find_one({"title": {"$regex": f"^{re.escape(title)}$", "$options": "i"}})
+        if existing_by_title:
+            print(f"⏩ Skipping (Title duplicate): {title}")
+            return False
+
+        # If both checks pass, insert new article
+        res = collection.insert_one(doc)
+        print(f"✅ Saved: {title[:60]}...")
+        return True
+
         if res.upserted_id:
             print(f"✅ Saved: {title[:60]}...")
             return True

@@ -9,7 +9,7 @@ load_dotenv()
 MONGO_URI = os.getenv("MONGO_URI")
 client = MongoClient(MONGO_URI)
 db = client["news_db"]
-collection = db["test_articles"]  # Changed to test_articles
+collection = db["articles"]  # Changed to test_articles
 
 def normalize_entity_name(entity_name):
     """Helper function to normalize entity names for comparison"""

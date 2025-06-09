@@ -12,7 +12,7 @@ load_dotenv()
 MONGO_URI = os.getenv("MONGO_URI")
 client = MongoClient(MONGO_URI)
 db = client["news_db"]
-collection = db["test_articles"]
+collection = db["articles"]
 
 # Neo4j Connection
 NEO4J_URI = os.getenv("NEO4J_URI")
@@ -26,32 +26,44 @@ def normalize_entity_name(entity_name):
 
 # === Neo4j: Get Related Entities and Their Related Entities ===
 def get_related_entities(entity_name):
-    """Get entities related to the target entity and their second-degree relations"""
+    """Get entities related to the target entity with improved relationship filtering"""
     normalized_name = normalize_entity_name(entity_name)
+    
+    # Improved query with relationship filtering and limits
     query = """
     MATCH (e:Entity)
     WHERE toLower(e.name) = $normalized_name
+    WITH e
     OPTIONAL MATCH (e)-[r:RELATION]-(related)
+    WHERE r.confidence > 0.7  // Lowered confidence threshold
+    WITH e, related, r
+    ORDER BY r.confidence DESC
+    LIMIT 20  // Increased limit for main entity relationships
+    WITH e, collect({related: related, r: r}) AS relatedRelations
+
+    UNWIND relatedRelations AS rr
+    WITH e, rr.related AS related, rr.r AS r
     OPTIONAL MATCH (related)-[r2:RELATION]-(related2)
     WHERE toLower(related2.name) <> $normalized_name
+    AND r2.confidence > 0.7  // Lowered confidence threshold
+    WITH e, related, r, related2, r2
+    ORDER BY r2.confidence DESC
+    WITH e, related, r, collect({related2: related2, r2: r2})[0..5] AS secondDegreeRelations
+
+    UNWIND secondDegreeRelations AS sdr
     RETURN DISTINCT 
         e.name AS main_entity_name,
         e.type AS main_entity_type,
         related.name AS related_name, 
         related.type AS related_type,
-        COLLECT(DISTINCT {
-            relation: r.type,
-            confidence: r.confidence,
-            sentence: r.sentence
-        }) AS relations_to_main,
-        related2.name AS related2_name, 
-        related2.type AS related2_type,
-        COLLECT(DISTINCT {
-            relation: r2.type,
-            confidence: r2.confidence,
-            sentence: r2.sentence
-        }) AS relations_between
-    LIMIT 20
+        r.type AS relation_to_main,
+        r.confidence AS confidence_to_main,
+        r.sentence AS sentence_to_main,
+        sdr.related2.name AS related2_name, 
+        sdr.related2.type AS related2_type,
+        sdr.r2.type AS relation_between,
+        sdr.r2.confidence AS confidence_between,
+        sdr.r2.sentence AS sentence_between
     """
     
     with driver.session() as session:
@@ -61,69 +73,124 @@ def get_related_entities(entity_name):
         links = []
         relation_details = defaultdict(list)
         main_entity = None
+        seen_relationships = set()  # Track seen relationships to avoid duplicates
 
         for record in result:
             if not main_entity and record["main_entity_name"]:
                 main_entity = {
                     "id": record["main_entity_name"],
                     "type": record["main_entity_type"],
-                    "normalized_label": record["main_entity_name"]  # Using Neo4j stored name as normalized
+                    "normalized_label": record["main_entity_name"]
                 }
                 nodes[normalize_entity_name(main_entity["id"])] = main_entity
 
-            # First-degree relation (main entity to related)
+            # First-degree relation processing
             if record["related_name"]:
                 related = {
                     "id": record["related_name"],
                     "type": record["related_type"],
-                    "normalized_label": record["related_name"]  # Using Neo4j stored name as normalized
+                    "normalized_label": record["related_name"]
                 }
                 nodes[normalize_entity_name(related["id"])] = related
                 
-                # Add relation details
-                for rel in record["relations_to_main"]:
-                    relation_details[(normalize_entity_name(main_entity["id"]), normalize_entity_name(related["id"]))].append({
-                        "type": rel["relation"],
-                        "confidence": rel["confidence"],
-                        "sentence": rel["sentence"]
+                # Create relationship key to check for duplicates
+                rel_key = (main_entity["id"], related["id"], record["relation_to_main"])
+                
+                if rel_key not in seen_relationships:
+                    seen_relationships.add(rel_key)
+                    relation_details[(normalize_entity_name(main_entity["id"]), 
+                                    normalize_entity_name(related["id"]))].append({
+                        "type": record["relation_to_main"],
+                        "confidence": record["confidence_to_main"],
+                        "sentence": record["sentence_to_main"]
                     })
+                    
                     links.append({
                         "source": main_entity["id"],
                         "target": related["id"],
-                        "relation": rel["relation"],
-                        "confidence": rel["confidence"]
+                        "relation": record["relation_to_main"],
+                        "confidence": record["confidence_to_main"],
+                        "is_direct": True  # Mark as direct relationship
                     })
 
-            # Second-degree relation (related to related2)
+            # Second-degree relation processing
             if record["related2_name"]:
                 related2 = {
                     "id": record["related2_name"],
                     "type": record["related2_type"],
-                    "normalized_label": record["related2_name"]  # Using Neo4j stored name as normalized
+                    "normalized_label": record["related2_name"]
                 }
                 nodes[normalize_entity_name(related2["id"])] = related2
                 
-                for rel in record["relations_between"]:
-                    relation_details[(normalize_entity_name(record["related_name"]), normalize_entity_name(related2["id"]))].append({
-                        "type": rel["relation"],
-                        "confidence": rel["confidence"],
-                        "sentence": rel["sentence"]
+                rel_key = (record["related_name"], related2["id"], record["relation_between"])
+                
+                if rel_key not in seen_relationships:
+                    seen_relationships.add(rel_key)
+                    relation_details[(normalize_entity_name(record["related_name"]), 
+                                    normalize_entity_name(related2["id"]))].append({
+                        "type": record["relation_between"],
+                        "confidence": record["confidence_between"],
+                        "sentence": record["sentence_between"]
                     })
+                    
                     links.append({
                         "source": record["related_name"],
                         "target": related2["id"],
-                        "relation": rel["relation"],
-                        "confidence": rel["confidence"]
+                        "relation": record["relation_between"],
+                        "confidence": record["confidence_between"],
+                        "is_direct": False  # Mark as indirect relationship
                     })
+
+        # Post-process links to improve visualization quality
+        processed_links = []
+        link_counts = defaultdict(int)
+
+    # First pass - count connections but don't filter main entity connections
+    for link in links:
+        if link["source"] != main_entity["id"] and link["target"] != main_entity["id"]:
+                link_counts[link["source"]] += 1
+                link_counts[link["target"]] += 1
+
+        # Second pass - filter but always keep main entity connections
+        for link in links:
+            # Always keep connections to main entity
+            if link["source"] == main_entity["id"] or link["target"] == main_entity["id"]:
+                processed_links.append({
+                    **link,
+                    "score": link["confidence"] * 1.5  # Boost score for main entity connections
+                })
+                continue
+        
+            # For other links, apply filtering
+            if link_counts.get(link["source"], 0) > 10 or link_counts.get(link["target"], 0) > 10:
+                continue
+        
+            score = link["confidence"]
+            if any(d["sentence"] == link.get("sentence", "") for d in relation_details.get(
+                f"{link['source']}||{link['target']}", [])):
+                score *= 0.7
+                
+            processed_links.append({
+                **link,
+                "score": score
+            })
+        
+        # Sort by score and take top relationships
+        processed_links.sort(key=lambda x: -x["score"])
+        processed_links = processed_links[:50]  # Limit to top 50 relationships
 
         return {
             "nodes": list(nodes.values()),
-            "links": links,
+            "links": [link for link in processed_links if link["score"] > 0.5],  # Lowered threshold
             "relation_details": {
                 f"{src}||{tgt}": details
                 for (src, tgt), details in relation_details.items()
             },
-            "main_entity": main_entity or {"id": entity_name, "type": "UNKNOWN", "normalized_label": entity_name}
+            "main_entity": main_entity or {
+                "id": entity_name, 
+                "type": "UNKNOWN", 
+                "normalized_label": entity_name
+            }
         }
 
 # === MongoDB: Search Articles with Ranking ===

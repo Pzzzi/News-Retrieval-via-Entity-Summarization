@@ -9,6 +9,7 @@ jobs:
   run-scrapers:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    continue-on-error: true  
 
     steps:
       - name: Checkout code
@@ -33,45 +34,105 @@ jobs:
       - name: Run BBC scraper
         env:
           MONGO_URI: ${{ secrets.MONGO_URI }}
-        run: |
-          set -e
-          python Backend/Database/Mongo/bbc_scraper.py
+        continue-on-error: true
+        run: python Backend/Database/Mongo/bbc_scraper.py
 
       - name: Run CNN scraper
         env:
           MONGO_URI: ${{ secrets.MONGO_URI }}
-        run: |
-          set -e
-          python Backend/Database/Mongo/cnn_scraper.py
+        continue-on-error: true
+        run: python Backend/Database/Mongo/cnn_scraper.py
 
       - name: Run Al-Jazeera scraper
         env:
           MONGO_URI: ${{ secrets.MONGO_URI }}
-        run: |
-          set -e
-          python Backend/Database/Mongo/aljazeera_scraper.py
+        continue-on-error: true
+        run: python Backend/Database/Mongo/aljazeera_scraper.py
 
       - name: Run The Guardian scraper
         env:
           MONGO_URI: ${{ secrets.MONGO_URI }}
-        run: |
-          set -e
-          python Backend/Database/Mongo/theguardian_scraper.py
+        continue-on-error: true
+        run: python Backend/Database/Mongo/theguardian_scraper.py
 
       - name: Run Sky News scraper
         env:
           MONGO_URI: ${{ secrets.MONGO_URI }}
+        continue-on-error: true
+        run: python Backend/Database/Mongo/skynews_scraper.py
+
+  run-ner:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: run-scrapers
+    if: always()  # Will run even if run-scrapers fails
+    continue-on-error: true  # Allows run-relation-extraction to run even if this fails
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Cache pip
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
         run: |
-          set -e
-          python Backend/Database/Mongo/skynews_scraper.py
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
       - name: Download spaCy model
         run: |
-          python -m spacy download en_core_web_trf
+          python -m spacy download en_core_web_sm
 
       - name: Run NER Entity Linking
         env:
           MONGO_URI: ${{ secrets.MONGO_URI }}
+        run: python Backend/Services/NER/ner_extraction.py
+
+  run-relation-extraction:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: run-ner
+    if: always()  # Will run even if previous jobs fail
+    continue-on-error: true  # Marks workflow as successful even if this fails
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Cache pip
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          
+      - name: Install dependencies
         run: |
-          set -e
-          python Backend/Services/NER/ner_extraction.py
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install torch transformers spacy pymongo tqdm python-dotenv neo4j
+
+      - name: Download spaCy model
+        run: |
+          python -m spacy download en_core_web_sm
+
+      - name: Run Relation Extraction
+        env:
+          MONGO_URI: ${{ secrets.MONGO_URI }}
+          NEO4J_URI: ${{ secrets.NEO4J_URI }}
+          NEO4J_USER: ${{ secrets.NEO4J_USER }}
+          NEO4J_PASSWORD: ${{ secrets.NEO4J_PASSWORD }}
+        run: python Backend/Database/Neo4j/relationship_classifier.py

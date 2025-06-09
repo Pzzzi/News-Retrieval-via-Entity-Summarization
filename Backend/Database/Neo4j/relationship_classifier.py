@@ -15,7 +15,7 @@ from collections import defaultdict
 load_dotenv()
 client = MongoClient(os.getenv("MONGO_URI"))
 db = client["news_db"]
-collection = db["test_articles"]
+collection = db["articles"]
 
 # Neo4j configuration
 NEO4J_URI = os.getenv("NEO4J_URI")
@@ -380,73 +380,85 @@ def is_valid_entity(entity):
         
     return True
 
-def process_document(doc, nlp, ingestor):
+def process_document(doc, nlp, ingestor, collection):
+    """Process document but only mark as processed if it has entities"""
     text = doc.get("content", "")
-    if not text:
-        return []
-    
     relations = []
     
-    for sent in nlp(text).sents:
-        sent_text = sent.text.strip()
-        if len(sent_text) < 10:
-            continue
-            
-        # ONLY USE WIKIDATA-ANNOTATED ENTITIES
-        sentence_entities = [
-            {
-                "label": entity["label"],
-                "type": entity.get("type", "UNKNOWN"),
-                "description": entity.get("description", ""),
-                "wikidata_id": entity.get("wikidata_id", "")
-            }
-            for entity in doc.get("entities", [])
-            if (re.search(rf'\b{re.escape(entity["label"])}\b', sent_text, re.I) 
-                and is_valid_entity(entity))
-        ]
-        
-        # Process entity pairs (only if we have at least 2 valid entities)
-        for subj, obj in [(sentence_entities[i], sentence_entities[j]) 
-                         for i in range(len(sentence_entities)) 
-                         for j in range(i+1, len(sentence_entities))]:
-            
-            rel, probs = predict_relationship(subj, obj, sent_text)
-            
-            if rel != "no_relation" and max(probs) >= CONFIDENCE_THRESHOLD:
-                # Ingest entities
-                ingestor.add_node_to_batch(
-                    name=subj["label"],
-                    entity_type=get_normalized_entity_type(subj["type"]),
-                    source=doc.get("source", "unknown"),
-                    description=subj["description"],
-                    wikidata_id=subj["wikidata_id"]
-                )
-                ingestor.add_node_to_batch(
-                    name=obj["label"],
-                    entity_type=get_normalized_entity_type(obj["type"]),
-                    source=doc.get("source", "unknown"),
-                    description=obj["description"],
-                    wikidata_id=obj["wikidata_id"]
-                )
-                
-                # Add relation
-                ingestor.add_relation_to_batch(
-                    subj["label"],
-                    obj["label"],
-                    rel,
-                    max(probs),
-                    sent_text
-                )
-                
-                relations.append({
-                    "subject": subj["label"],
-                    "object": obj["label"],
-                    "relation": rel,
-                    "confidence": max(probs),
-                    "sentence": sent_text
-                })
+    # Skip if no entities field or empty entities - DON'T MARK THESE
+    if not doc.get("entities"):
+        return relations
     
-    return relations
+    try:
+        # First, add all entities from this document to Neo4j
+        for entity in doc.get("entities", []):
+            if is_valid_entity(entity):
+                ingestor.add_node_to_batch(
+                    name=entity["label"],
+                    entity_type=get_normalized_entity_type(entity.get("type", "UNKNOWN")),
+                    source=f"article_{doc['_id']}",
+                    description=entity.get("description", ""),
+                    wikidata_id=entity.get("wikidata_id", "")
+                )
+        
+        # Process document content for relation extraction
+        for sent in nlp(text).sents:
+            sent_text = sent.text.strip()
+            if len(sent_text) < 10:
+                continue
+                
+            sentence_entities = [
+                {
+                    "label": entity["label"],
+                    "type": entity.get("type", "UNKNOWN"),
+                    "description": entity.get("description", ""),
+                    "wikidata_id": entity.get("wikidata_id", "")
+                }
+                for entity in doc.get("entities", [])
+                if (re.search(rf'\b{re.escape(entity["label"])}\b', sent_text, re.I) 
+                    and is_valid_entity(entity))
+            ]
+            
+            if len(sentence_entities) < 2:
+                continue
+                
+            for subj, obj in [(sentence_entities[i], sentence_entities[j]) 
+                             for i in range(len(sentence_entities)) 
+                             for j in range(i+1, len(sentence_entities))]:
+                
+                rel, probs = predict_relationship(subj, obj, sent_text)
+                
+                if rel != "no_relation" and max(probs) >= CONFIDENCE_THRESHOLD:
+                    # Add relation to Neo4j batch
+                    ingestor.add_relation_to_batch(
+                        source=subj["label"],
+                        target=obj["label"],
+                        rel_type=rel,
+                        confidence=max(probs),
+                        sentence=sent_text
+                    )
+                    
+                    relations.append({
+                        "subject": subj["label"],
+                        "object": obj["label"],
+                        "relation": rel,
+                        "confidence": max(probs),
+                        "sentence": sent_text
+                    })
+        
+        # ONLY MARK AS PROCESSED IF DOCUMENT HAS ENTITIES
+        # (regardless of whether relations were found)
+        collection.update_one(
+            {"_id": doc["_id"]},
+            {"$set": {
+                "neo4j_processed": True,
+            }}
+        )
+        return relations
+    
+    except Exception as e:
+        print(f"Error processing document {doc['_id']}: {str(e)}")
+        return relations
 
 def main():
     # Load spaCy model
@@ -456,18 +468,42 @@ def main():
     ingestor = Neo4jIngestor(NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD)
     
     try:
-        # Test on documents (adjust limit as needed)
-        docs = collection.find().limit(50)  # Increased from 5 to 50 for better batching
+        # Query for unprocessed documents with entities
+        query = {
+            "entities": {"$exists": True, "$ne": []},
+            "$or": [
+                {"neo4j_processed": {"$exists": False}},
+                {"neo4j_processed": False}
+            ]
+        }
+        
+        # Get total count for progress bar
+        total_docs = collection.count_documents(query)
+        print(f"Found {total_docs} documents to process")
+        
+        # Process in batches for better memory management
+        batch_size = 30
+        processed_count = 0
         all_relations = []
         
-        for doc in tqdm(docs):
-            print(f"\nProcessing document: {doc['_id']}")
-            relations = process_document(doc, nlp, ingestor)
-            
-            if relations:
-                all_relations.extend(relations)
+        # Use find() without limit and batch manually
+        cursor = collection.find(query).batch_size(batch_size)
         
-        # Flush any remaining batches
+        with tqdm(total=total_docs, desc="Processing documents") as pbar:
+            for doc in cursor:
+                relations = process_document(doc, nlp, ingestor, collection)
+                
+                if relations:
+                    all_relations.extend(relations)
+                
+                processed_count += 1
+                pbar.update(1)
+                
+                # Periodically flush batches
+                if processed_count % batch_size == 0:
+                    ingestor.process_batches()
+        
+        # Final flush
         ingestor.process_batches()
         
         # Summary of results
@@ -477,10 +513,13 @@ def main():
                 relation_types[rel["relation"]] += 1
             
             print("\n===== SUMMARY =====")
+            print(f"Total documents processed: {processed_count}")
             print(f"Total relations extracted: {len(all_relations)}")
             print("Relations by type:")
             for rel_type, count in sorted(relation_types.items(), key=lambda x: x[1], reverse=True):
                 print(f"  - {rel_type}: {count}")
+        else:
+            print("\nNo relations extracted from processed documents")
                 
     finally:
         ingestor.close()

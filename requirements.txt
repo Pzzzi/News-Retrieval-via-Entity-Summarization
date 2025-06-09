@@ -8,3 +8,5 @@ spacy==3.8.6
 spacy-entity-linker==1.0.3
 torch>=2.7.0
 transformers==4.49.0
+neo4j==5.20.0  
+tqdm==4.66.4
