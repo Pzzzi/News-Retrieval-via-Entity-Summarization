@@ -77,8 +77,3 @@ def process_collection():
 if __name__ == "__main__":
     process_collection()
     print("✅ Processing complete!")
-
-
-
-
-

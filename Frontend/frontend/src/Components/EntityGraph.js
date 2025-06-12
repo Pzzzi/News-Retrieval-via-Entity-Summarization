@@ -1,54 +1,76 @@
 import React, { useEffect, useRef } from "react";
 import * as d3 from "d3";
-import '../styles/EntityGraph.css';
 
 const EntityGraph = ({ entity, relatedEntities, links, onEntityClick }) => {
   const svgRef = useRef();
 
   // Comprehensive color palette matching the other components
   const colorMap = {
-    PERSON: "#3B82F6",      // blue-600
-    NORP: "#8B5CF6",        // purple-600
-    FAC: "#F59E0B",         // amber-600
-    ORG: "#F43F5E",         // indigo-600
-    GPE: "#10B981",         // green-600
-    LOC: "#059669",         // emerald-600
-    PRODUCT: "#06B6D4",     // cyan-600
-    EVENT: "#EF4444",       // red-600
-    WORK_OF_ART: "#D946EF", // fuchsia-600
-    LAW: "#7C3AED",         // violet-600
-    LANGUAGE: "#0EA5E9",    // sky-600
-    DATE: "#EAB308",        // yellow-600
-    TIME: "#F97316",        // orange-600
-    PERCENT: "#84CC16",     // lime-600
-    MONEY: "#14B8A6",       // teal-600
-    QUANTITY: "#EC4899",    // pink-600
-    ORDINAL: "#6366F1",     // rose-600
-    CARDINAL: "#F59E0B",    // amber-600 (same as FAC)
-    UNKNOWN: "#9CA3AF"      // gray-400
+    PERSON: "#4F46E5",      // Modern indigo
+    NORP: "#7C3AED",        // Rich purple
+    FAC: "#F59E0B",         // Warm amber
+    ORG: "#DC2626",         // Strong red
+    GPE: "#059669",         // Forest green
+    LOC: "#0D9488",         // Teal
+    PRODUCT: "#0891B2",     // Deep cyan
+    EVENT: "#E11D48",       // Rose red
+    WORK_OF_ART: "#C026D3", // Magenta
+    LAW: "#7C2D12",         // Brown
+    LANGUAGE: "#0284C7",    // Blue
+    DATE: "#CA8A04",        // Gold
+    TIME: "#EA580C",        // Orange
+    PERCENT: "#65A30D",     // Lime
+    MONEY: "#0F766E",       // Dark teal
+    QUANTITY: "#BE185D",    // Pink
+    ORDINAL: "#BE123C",     // Deep rose
+    CARDINAL: "#D97706",    // Amber
+    UNKNOWN: "#6B7280"      // Neutral gray
   };
 
   // Lighter versions for hover effects
   const lightColorMap = {
-    PERSON: "#93C5FD",      // blue-300
-    NORP: "#C4B5FD",        // purple-300
-    FAC: "#FCD34D",         // amber-300
-    ORG: "#A5B4FC",         // indigo-300
-    GPE: "#6EE7B7",         // green-300
-    LOC: "#6EE7B7",         // emerald-300
-    PRODUCT: "#67E8F9",     // cyan-300
-    EVENT: "#FCA5A5",       // red-300
-    WORK_OF_ART: "#F0ABFC", // fuchsia-300
-    LAW: "#C4B5FD",         // violet-300
-    LANGUAGE: "#7DD3FC",    // sky-300
-    DATE: "#FDE047",        // yellow-300
-    TIME: "#FDBA74",        // orange-300
-    PERCENT: "#BEF264",     // lime-300
-    MONEY: "#5EEAD4",       // teal-300
-    QUANTITY: "#F9A8D4",    // pink-300
-    ORDINAL: "#FDA4AF",     // rose-300
-    CARDINAL: "#FCD34D",    // amber-300 (same as FAC)
-    UNKNOWN: "#D1D5DB"      // gray-300
+    PERSON: "#8B5CF6",
+    NORP: "#A855F7",
+    FAC: "#FBBF24",
+    ORG: "#F87171",
+    GPE: "#34D399",
+    LOC: "#2DD4BF",
+    PRODUCT: "#22D3EE",
+    EVENT: "#FB7185",
+    WORK_OF_ART: "#E879F9",
+    LAW: "#A78BFA",
+    LANGUAGE: "#38BDF8",
+    DATE: "#FCD34D",
+    TIME: "#FDBA74",
+    PERCENT: "#A3E635",
+    MONEY: "#5EEAD4",
+    QUANTITY: "#F472B6",
+    ORDINAL: "#FDA4AF",
+    CARDINAL: "#FBBF24",
+    UNKNOWN: "#9CA3AF"
+  };
+
+  // Relationship label mapping
+  const relationLabels = {
+    "Cause-Effect(e1,e2)": "Cause →",
+    "Cause-Effect(e2,e1)": "← Effect",
+    "Instrument-Agency(e1,e2)": "Tool →",
+    "Instrument-Agency(e2,e1)": "← User",
+    "Product-Producer(e1,e2)": "Product →",
+    "Product-Producer(e2,e1)": "← Maker",
+    "Content-Container(e1,e2)": "Inside →",
+    "Content-Container(e2,e1)": "← Contains",
+    "Entity-Origin(e1,e2)": "Origin →",
+    "Entity-Origin(e2,e1)": "← From",
+    "Entity-Destination(e1,e2)": "→ Destination",
+    "Entity-Destination(e2,e1)": "Target ←",
+    "Component-Whole(e1,e2)": "Part →",
+    "Component-Whole(e2,e1)": "← Whole",
+    "Member-Collection(e1,e2)": "Member →",
+    "Member-Collection(e2,e1)": "← Group",
+    "Message-Topic(e1,e2)": "Topic →",
+    "Message-Topic(e2,e1)": "← About",
+    "Other": "─ Other"
   };
 
   useEffect(() => {
@@ -96,7 +118,7 @@ const EntityGraph = ({ entity, relatedEntities, links, onEntityClick }) => {
         mergedLinksMap.set(key, {
           source: link.source,
           target: link.target,
-          relation: link.relation,  // just take the first relation
+          relation: link.relation,
           confidence: link.confidence
         });
       }
@@ -182,7 +204,7 @@ const EntityGraph = ({ entity, relatedEntities, links, onEntityClick }) => {
         return (d.source === entity.id || d.target === entity.id) ? 2.5 : 1.5;
       });
 
-    // Add link labels (relationship types)
+    // Add link labels (relationship types) with our new standardized labels
     const linkLabels = svgGroup.selectAll(".link-label")
       .data(linkData)
       .enter().append("text")
@@ -193,13 +215,7 @@ const EntityGraph = ({ entity, relatedEntities, links, onEntityClick }) => {
       .style("font-weight", "bold")
       .style("font-style", "italic")
       .style("text-shadow", "0 1px 2px white")
-      .text(d => {
-        // Simplify some of the relation types for display
-        if (d.relation === "Entity-Destination(e2,e1)") return "→ Destination";
-        if (d.relation === "Instrument-Agency(e2,e1)") return "← Agency";
-        if (d.relation === "Message-Topic(e1,e2)") return "Topic →";
-        return d.relation;
-      });
+      .text(d => relationLabels[d.relation] || d.relation);
 
     // Draw nodes with enhanced styling
     const node = svgGroup.selectAll(".node")
@@ -342,7 +358,16 @@ const EntityGraph = ({ entity, relatedEntities, links, onEntityClick }) => {
     };
   }, [entity, relatedEntities, links, onEntityClick]);
 
-  return <svg ref={svgRef}></svg>;
+  return (
+    <div style={{
+      padding: '20px',
+      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+      borderRadius: '20px',
+      margin: '10px'
+    }}>
+      <svg ref={svgRef}></svg>
+    </div>
+  );
 };
 
 export default EntityGraph;

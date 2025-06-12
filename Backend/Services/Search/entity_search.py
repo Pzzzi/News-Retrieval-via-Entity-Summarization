@@ -26,28 +26,34 @@ def normalize_entity_name(entity_name):
 
 # === Neo4j: Get Related Entities and Their Related Entities ===
 def get_related_entities(entity_name):
-    """Get entities related to the target entity with improved relationship filtering"""
+    """Get entities related to the target entity with balanced inclusion of 'Other' relationships"""
     normalized_name = normalize_entity_name(entity_name)
     
-    # Improved query with relationship filtering and limits
+    # Query that gets specific relationships first, then supplements with 'Other'
     query = """
     MATCH (e:Entity)
     WHERE toLower(e.name) = $normalized_name
     WITH e
+    // First get non-Other relationships
     OPTIONAL MATCH (e)-[r:RELATION]-(related)
-    WHERE r.confidence > 0.7  // Lowered confidence threshold
-    WITH e, related, r
-    ORDER BY r.confidence DESC
-    LIMIT 20  // Increased limit for main entity relationships
-    WITH e, collect({related: related, r: r}) AS relatedRelations
-
-    UNWIND relatedRelations AS rr
+    WHERE r.confidence > 0.7 AND r.type <> 'Other'
+    WITH e, collect({related: related, r: r})[0..15] AS specific_relations
+    
+    // Then supplement with limited Other relationships
+    OPTIONAL MATCH (e)-[r:RELATION]-(related)
+    WHERE r.confidence > 0.7 AND r.type = 'Other'
+    WITH e, specific_relations, collect({related: related, r: r})[0..5] AS other_relations
+    
+    // Combine and process
+    UNWIND (specific_relations + other_relations) AS rr
     WITH e, rr.related AS related, rr.r AS r
     OPTIONAL MATCH (related)-[r2:RELATION]-(related2)
     WHERE toLower(related2.name) <> $normalized_name
-    AND r2.confidence > 0.7  // Lowered confidence threshold
+    AND r2.confidence > 0.7
     WITH e, related, r, related2, r2
-    ORDER BY r2.confidence DESC
+    ORDER BY 
+        CASE WHEN r2.type = 'Other' THEN 1 ELSE 0 END,  // Sort Others to end
+        r2.confidence DESC
     WITH e, related, r, collect({related2: related2, r2: r2})[0..5] AS secondDegreeRelations
 
     UNWIND secondDegreeRelations AS sdr
@@ -73,7 +79,11 @@ def get_related_entities(entity_name):
         links = []
         relation_details = defaultdict(list)
         main_entity = None
-        seen_relationships = set()  # Track seen relationships to avoid duplicates
+        seen_relationships = set()
+
+        # Track counts of different relationship types
+        relationship_counts = defaultdict(int)
+        other_relationships = []
 
         for record in result:
             if not main_entity and record["main_entity_name"]:
@@ -84,7 +94,7 @@ def get_related_entities(entity_name):
                 }
                 nodes[normalize_entity_name(main_entity["id"])] = main_entity
 
-            # First-degree relation processing
+            # Process relationships
             if record["related_name"]:
                 related = {
                     "id": record["related_name"],
@@ -93,27 +103,28 @@ def get_related_entities(entity_name):
                 }
                 nodes[normalize_entity_name(related["id"])] = related
                 
-                # Create relationship key to check for duplicates
-                rel_key = (main_entity["id"], related["id"], record["relation_to_main"])
+                rel_type = record["relation_to_main"]
+                rel_key = (main_entity["id"], related["id"], rel_type)
                 
                 if rel_key not in seen_relationships:
                     seen_relationships.add(rel_key)
-                    relation_details[(normalize_entity_name(main_entity["id"]), 
-                                    normalize_entity_name(related["id"]))].append({
-                        "type": record["relation_to_main"],
-                        "confidence": record["confidence_to_main"],
-                        "sentence": record["sentence_to_main"]
-                    })
+                    relationship_counts[rel_type] += 1
                     
-                    links.append({
+                    link_data = {
                         "source": main_entity["id"],
                         "target": related["id"],
-                        "relation": record["relation_to_main"],
+                        "relation": rel_type,
                         "confidence": record["confidence_to_main"],
-                        "is_direct": True  # Mark as direct relationship
-                    })
+                        "sentence": record["sentence_to_main"],
+                        "is_direct": True
+                    }
+                    
+                    if rel_type == "Other":
+                        other_relationships.append(link_data)
+                    else:
+                        links.append(link_data)
 
-            # Second-degree relation processing
+            # Process second-degree relationships
             if record["related2_name"]:
                 related2 = {
                     "id": record["related2_name"],
@@ -122,66 +133,84 @@ def get_related_entities(entity_name):
                 }
                 nodes[normalize_entity_name(related2["id"])] = related2
                 
-                rel_key = (record["related_name"], related2["id"], record["relation_between"])
+                rel_type = record["relation_between"]
+                rel_key = (record["related_name"], related2["id"], rel_type)
                 
                 if rel_key not in seen_relationships:
                     seen_relationships.add(rel_key)
-                    relation_details[(normalize_entity_name(record["related_name"]), 
-                                    normalize_entity_name(related2["id"]))].append({
-                        "type": record["relation_between"],
-                        "confidence": record["confidence_between"],
-                        "sentence": record["sentence_between"]
-                    })
+                    relationship_counts[rel_type] += 1
                     
-                    links.append({
+                    link_data = {
                         "source": record["related_name"],
                         "target": related2["id"],
-                        "relation": record["relation_between"],
+                        "relation": rel_type,
                         "confidence": record["confidence_between"],
-                        "is_direct": False  # Mark as indirect relationship
-                    })
+                        "sentence": record["sentence_between"],
+                        "is_direct": False
+                    }
+                    
+                    if rel_type == "Other":
+                        other_relationships.append(link_data)
+                    else:
+                        links.append(link_data)
 
-        # Post-process links to improve visualization quality
+        # Strategic inclusion of Other relationships
+        max_other_relationships = max(3, 20 - len(links))  # Ensure we have up to 20 total
+        if other_relationships:
+            # Sort Other relationships by confidence and take top ones
+            other_relationships.sort(key=lambda x: -x["confidence"])
+            selected_others = other_relationships[:max_other_relationships]
+            
+            # Add to links with reduced score
+            for rel in selected_others:
+                links.append({
+                    **rel,
+                    "score": rel["confidence"] * 0.7  # Deprioritize Others
+                })
+
+        # Post-processing to prevent overcrowding
         processed_links = []
-        link_counts = defaultdict(int)
+        entity_connection_counts = defaultdict(int)
 
-    # First pass - count connections but don't filter main entity connections
-    for link in links:
-        if link["source"] != main_entity["id"] and link["target"] != main_entity["id"]:
-                link_counts[link["source"]] += 1
-                link_counts[link["target"]] += 1
+        # First count connections
+        for link in links:
+            entity_connection_counts[link["source"]] += 1
+            entity_connection_counts[link["target"]] += 1
 
-        # Second pass - filter but always keep main entity connections
+        # Then filter while keeping important connections
         for link in links:
             # Always keep connections to main entity
             if link["source"] == main_entity["id"] or link["target"] == main_entity["id"]:
+                score = link["confidence"]
+                if link["relation"] == "Other":
+                    score *= 0.6  # Further deprioritize main entity Others
                 processed_links.append({
                     **link,
-                    "score": link["confidence"] * 1.5  # Boost score for main entity connections
+                    "score": score
                 })
                 continue
-        
+            
             # For other links, apply filtering
-            if link_counts.get(link["source"], 0) > 10 or link_counts.get(link["target"], 0) > 10:
+            if entity_connection_counts.get(link["source"], 0) > 8 or \
+               entity_connection_counts.get(link["target"], 0) > 8:
                 continue
-        
-            score = link["confidence"]
-            if any(d["sentence"] == link.get("sentence", "") for d in relation_details.get(
-                f"{link['source']}||{link['target']}", [])):
-                score *= 0.7
                 
+            score = link["confidence"]
+            if link["relation"] == "Other":
+                score *= 0.5  # Strong deprioritization for non-main Others
+            
             processed_links.append({
                 **link,
                 "score": score
             })
-        
-        # Sort by score and take top relationships
+
+        # Final sorting and limiting
         processed_links.sort(key=lambda x: -x["score"])
-        processed_links = processed_links[:50]  # Limit to top 50 relationships
+        final_links = processed_links[:50]  # Hard limit
 
         return {
             "nodes": list(nodes.values()),
-            "links": [link for link in processed_links if link["score"] > 0.5],  # Lowered threshold
+            "links": final_links,
             "relation_details": {
                 f"{src}||{tgt}": details
                 for (src, tgt), details in relation_details.items()
@@ -190,6 +219,10 @@ def get_related_entities(entity_name):
                 "id": entity_name, 
                 "type": "UNKNOWN", 
                 "normalized_label": entity_name
+            },
+            "stats": {
+                "total_relationships": len(final_links),
+                "other_relationships": sum(1 for l in final_links if l["relation"] == "Other")
             }
         }
 
@@ -339,23 +372,40 @@ def search_articles_by_entity(entity_name, related_entities, page=1, per_page=10
 
     processed_articles = []
     for article in articles:
-        # Create a mapping of text->label for all entities in this article
-        entity_normalization_map = {
-            normalize_entity_name(ent["text"]): ent.get("label", ent["text"])
-            for ent in article.get("entities", [])
-        }
+        # Create a mapping of wikidata_id to entity info for deduplication
+        unique_entities = {}
         
-        # Process matched entities to use normalized labels
-        normalized_matches = []
         for ent in article.get("matched_entities", []):
-            normalized_label = ent.get("label", ent["text"])
-            normalized_matches.append({
-                "original_text": ent["text"],
-                "normalized_label": normalized_label,
-                "type": ent.get("type"),
-                "wikidata_id": ent.get("wikidata_id"),
-                "description": ent.get("description")
-            })
+            wikidata_id = ent.get("wikidata_id")
+            if not wikidata_id:
+                # If no wikidata_id, use the normalized label as fallback
+                normalized_label = ent.get("label", ent["text"])
+                key = f"no_id_{normalized_label.lower()}"
+            else:
+                key = str(wikidata_id)
+            
+            # Only keep the first occurrence or the one with more complete information
+            if key not in unique_entities:
+                unique_entities[key] = {
+                    "original_text": ent["text"],
+                    "normalized_label": ent.get("label", ent["text"]),
+                    "type": ent.get("type"),
+                    "wikidata_id": ent.get("wikidata_id"),
+                    "description": ent.get("description")
+                }
+            else:
+                # If this version has more complete info, update it
+                current = unique_entities[key]
+                if not current["description"] and ent.get("description"):
+                    current["description"] = ent["description"]
+                if not current["type"] and ent.get("type"):
+                    current["type"] = ent["type"]
+                # Prefer longer original text (more complete version)
+                if len(ent["text"]) > len(current["original_text"]):
+                    current["original_text"] = ent["text"]
+        
+        # Convert the dictionary back to a list
+        normalized_matches = list(unique_entities.values())
         
         processed_articles.append({
             "_id": str(article["_id"]),
